@@ -13,13 +13,8 @@ android {
         applicationId = "com.vliveconvert.app"
         minSdk = 34
         targetSdk = 37
-<<<<<<< HEAD
-        versionCode = 2
-        versionName = "1.0.1"
-=======
-        versionCode = 1
-        versionName = "1.0"
->>>>>>> 12de02fedf9915ab9fc96da4130b949d73339acf
+        versionCode = 3
+        versionName = "1.0.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // 只打 arm64（vivo 真机）与 x86_64（模拟器），减少 so 体积（对齐 ZLivePhoto）
@@ -52,7 +47,6 @@ android {
     }
 }
 
-<<<<<<< HEAD
 // release 产物直接命名为 VLiveConvert.apk（输出到 app/build/outputs/apk/release/）
 androidComponents {
     onVariants { variant ->
@@ -64,8 +58,6 @@ androidComponents {
     }
 }
 
-=======
->>>>>>> 12de02fedf9915ab9fc96da4130b949d73339acf
 dependencies {
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)

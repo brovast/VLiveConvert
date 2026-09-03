@@ -62,20 +62,18 @@ fun MainScreen(
     isConverting: Boolean,
     progress: Float,
     progressDetail: String,
-<<<<<<< HEAD
     pendingRestoreCount: Int,
     onRestoreOriginals: () -> Unit,
-=======
->>>>>>> 12de02fedf9915ab9fc96da4130b949d73339acf
+    outputRelPath: String,
+    isMovingOutputs: Boolean,
+    onEditOutputPath: () -> Unit,
+    onMoveToCamera: () -> Unit,
     deleteOriginal: Boolean,
     onToggleDeleteOriginal: (Boolean) -> Unit,
     onAddMore: () -> Unit,
     onStartConvert: () -> Unit,
     onClearAll: () -> Unit,
-<<<<<<< HEAD
     onOpenFixTime: () -> Unit,
-=======
->>>>>>> 12de02fedf9915ab9fc96da4130b949d73339acf
     onRemove: (ConvertItem) -> Unit
 ) {
     Column(
@@ -102,7 +100,6 @@ fun MainScreen(
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-<<<<<<< HEAD
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     if (!isConverting) {
                         Text(
@@ -112,6 +109,17 @@ fun MainScreen(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(8.dp))
                                 .clickableNoRipple(onOpenFixTime)
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                    if (!isConverting && !isMovingOutputs) {
+                        Text(
+                            "移到相机",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickableNoRipple(onMoveToCamera)
                                 .padding(horizontal = 8.dp, vertical = 4.dp)
                         )
                     }
@@ -126,18 +134,6 @@ fun MainScreen(
                                 .padding(horizontal = 8.dp, vertical = 4.dp)
                         )
                     }
-=======
-                if (items.isNotEmpty() && !isConverting) {
-                    Text(
-                        "清空",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickableNoRipple(onClearAll)
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                    )
->>>>>>> 12de02fedf9915ab9fc96da4130b949d73339acf
                 }
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
@@ -153,7 +149,6 @@ fun MainScreen(
             )
         }
 
-<<<<<<< HEAD
         // ── 恢复原图入口（回收站路径删除后显示，30 天内有效） ──
         if (pendingRestoreCount > 0) {
             Text(
@@ -169,8 +164,6 @@ fun MainScreen(
             )
         }
 
-=======
->>>>>>> 12de02fedf9915ab9fc96da4130b949d73339acf
         // ── 列表 ──
         Box(Modifier.weight(1f).fillMaxWidth()) {
             if (items.isEmpty()) {
@@ -223,6 +216,32 @@ fun MainScreen(
                         modifier = Modifier.padding(bottom = 6.dp)
                     )
                 }
+                // ── 输出目录（点击修改） ──
+                Row(
+                    Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "输出目录：$outputRelPath",
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickableNoRipple(onEditOutputPath)
+                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                    )
+                    Text(
+                        "修改",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickableNoRipple(onEditOutputPath)
+                            .padding(horizontal = 6.dp, vertical = 4.dp)
+                    )
+                }
                 // ── 转换后删除原图开关（处理中禁用，保证批次语义确定） ──
                 Row(
                     Modifier.fillMaxWidth(),
@@ -232,11 +251,7 @@ fun MainScreen(
                         Text("转换后删除原图",
                             style = MaterialTheme.typography.bodyMedium)
                         Text(
-<<<<<<< HEAD
                             "删除原 .jpg 与伴生 .mp4（恢复方式见删除完成后的提示）",
-=======
-                            "删除原 .jpg 与伴生 .mp4（未授权所有文件访问时删除前需系统确认）",
->>>>>>> 12de02fedf9915ab9fc96da4130b949d73339acf
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

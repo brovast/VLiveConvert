@@ -17,42 +17,37 @@ import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-<<<<<<< HEAD
 import androidx.compose.runtime.mutableIntStateOf
-=======
->>>>>>> 12de02fedf9915ab9fc96da4130b949d73339acf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
 import com.vliveconvert.app.convert.Converter
-<<<<<<< HEAD
 import com.vliveconvert.app.core.PhotoTime
-=======
->>>>>>> 12de02fedf9915ab9fc96da4130b949d73339acf
 import com.vliveconvert.app.picker.AlbumInfo
 import com.vliveconvert.app.picker.MediaItem
 import com.vliveconvert.app.picker.MediaRepo
 import com.vliveconvert.app.picker.PickerScanner
 import com.vliveconvert.app.picker.PickerScreen
-<<<<<<< HEAD
 import com.vliveconvert.app.picker.SingleLiveScanner
 import com.vliveconvert.app.ui.ConvertItem
 import com.vliveconvert.app.ui.FixTimeScreen
-=======
-import com.vliveconvert.app.ui.ConvertItem
->>>>>>> 12de02fedf9915ab9fc96da4130b949d73339acf
 import com.vliveconvert.app.ui.MainScreen
 import com.vliveconvert.app.ui.PermissionScreen
 import com.vliveconvert.app.ui.theme.VLiveConvertTheme
@@ -62,11 +57,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
-<<<<<<< HEAD
 import org.json.JSONArray
 import org.json.JSONObject
-=======
->>>>>>> 12de02fedf9915ab9fc96da4130b949d73339acf
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicInteger
@@ -88,19 +80,12 @@ class MainActivity : ComponentActivity() {
 
     // 权限
     private var showSettingsDialog by mutableStateOf(false)
-<<<<<<< HEAD
     // 所有文件访问权限引导弹窗（删除原图 / 修复时间功能需要时提示）
     private var showAllFilesDialog by mutableStateOf(false)
     // 权限授予后要执行的动作（默认进入内置选择器）
     private var pendingPermissionAction: (() -> Unit)? = null
     // 所有文件访问权限授予后要执行的动作（如进入修复时间界面）
     private var pendingAfterAllFiles: (() -> Unit)? = null
-=======
-    // 所有文件访问权限引导弹窗（开启「删除原图」且未授权时提示）
-    private var showAllFilesDialog by mutableStateOf(false)
-    // 权限授予后要执行的动作（默认进入内置选择器）
-    private var pendingPermissionAction: (() -> Unit)? = null
->>>>>>> 12de02fedf9915ab9fc96da4130b949d73339acf
 
     // 转换后删除原图（持久化开关）
     private var deleteOriginal by mutableStateOf(false)
@@ -108,18 +93,14 @@ class MainActivity : ComponentActivity() {
     private val pendingDeleteUris = java.util.Collections.synchronizedList(mutableListOf<Uri>())
     private var deleteBaseStatus = ""
     private var pendingDeleteCount = 0
-<<<<<<< HEAD
     /** 本次待写入回收站的 URI（确认成功后转持久化恢复记录） */
     private var lastTrashUris: List<String> = emptyList()
     /** 回收站中的原图记录数（未授权所有文件访问的删除路径），应用内可恢复（30 天内） */
     private var pendingRestoreCount by mutableIntStateOf(0)
-=======
->>>>>>> 12de02fedf9915ab9fc96da4130b949d73339acf
 
     // 转换暂存目录（应用缓存，导出后清理）
     private lateinit var tempOutDir: File
 
-<<<<<<< HEAD
     // 修复文件时间（把单文件实况的「修改时间」按文件名时间修正；相册式选择，同双文件选择器）
     private var showFixTime by mutableStateOf(false)
     private lateinit var singleLiveScanner: SingleLiveScanner
@@ -129,8 +110,13 @@ class MainActivity : ComponentActivity() {
     private var fixProgress by mutableFloatStateOf(0f)
     private var fixSelectionReset by mutableIntStateOf(0)
 
-=======
->>>>>>> 12de02fedf9915ab9fc96da4130b949d73339acf
+    // 自定义输出目录（MediaStore 相对路径，默认 Pictures/VLiveConvert）
+    private var outputRelPath by mutableStateOf("Pictures/VLiveConvert")
+    private var showOutputPathDialog by mutableStateOf(false)
+    private var outputPathInput by mutableStateOf("")
+    // 输出文件批量移动到 DCIM/Camera
+    private var isMovingOutputs by mutableStateOf(false)
+
     // 动态照片 = 图片 + 伴生视频，必须同时申请图片与视频读取权限
     // （双文件格式需要直接读取同目录 .mp4，缺视频权限会报 EACCES）
     private fun requiredReadPermissions(): Array<String> = arrayOf(
@@ -176,7 +162,6 @@ class MainActivity : ComponentActivity() {
     private val deleteRequestLauncher = registerForActivityResult(
         ActivityResultContracts.StartIntentSenderForResult()
     ) { result ->
-<<<<<<< HEAD
         if (result.resultCode == RESULT_OK) {
             // 记录本批被回收的原图，供应用内「恢复原图」撤销（vivo 相册不显示此类项目）
             if (lastTrashUris.isNotEmpty()) {
@@ -216,24 +201,6 @@ class MainActivity : ComponentActivity() {
         } else {
             statusText = "未授予所有文件访问权限：修复文件时间与静默删除原图暂不可用"
         }
-=======
-        val base = deleteBaseStatus
-        statusText = if (result.resultCode == RESULT_OK)
-            "$base；原图已移入系统回收站（$pendingDeleteCount 项）"
-        else
-            "$base；已取消删除原图"
-        pendingDeleteUris.clear()
-    }
-
-    // 所有文件访问权限设置页返回：刷新提示
-    private val allFilesAccessLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) {
-        statusText = if (Environment.isExternalStorageManager())
-            "已授予所有文件访问权限：删除原图将立即执行，不再弹系统确认框"
-        else
-            "未授予所有文件访问权限：删除原图前仍会弹出系统「移入回收站」确认框"
->>>>>>> 12de02fedf9915ab9fc96da4130b949d73339acf
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -248,19 +215,15 @@ class MainActivity : ComponentActivity() {
 
         mediaRepo = MediaRepo(contentResolver)
         scanner = PickerScanner(mediaRepo)
-<<<<<<< HEAD
         singleLiveScanner = SingleLiveScanner(mediaRepo)
 
         // 恢复删除原图开关 + 刷新可恢复记录数
         deleteOriginal = getSharedPreferences("vliveconvert", MODE_PRIVATE)
             .getBoolean("delete_original", false)
         refreshRestoreCount()
-=======
-
-        // 恢复删除原图开关
-        deleteOriginal = getSharedPreferences("vliveconvert", MODE_PRIVATE)
-            .getBoolean("delete_original", false)
->>>>>>> 12de02fedf9915ab9fc96da4130b949d73339acf
+        // 恢复自定义输出目录
+        outputRelPath = getSharedPreferences("vliveconvert", MODE_PRIVATE)
+            .getString("output_rel_path", "Pictures/VLiveConvert") ?: "Pictures/VLiveConvert"
 
         setContent {
             VLiveConvertTheme {
@@ -285,7 +248,6 @@ class MainActivity : ComponentActivity() {
                                 addPickedItems(picked)
                             }
                         )
-<<<<<<< HEAD
                     } else if (showFixTime) {
                         FixTimeScreen(
                             albums = fixAlbums,
@@ -298,8 +260,6 @@ class MainActivity : ComponentActivity() {
                             onBack = { showFixTime = false },
                             onFix = { selected -> startFixTimes(selected) }
                         )
-=======
->>>>>>> 12de02fedf9915ab9fc96da4130b949d73339acf
                     } else {
                         MainScreen(
                             items = items.toList(),
@@ -307,12 +267,16 @@ class MainActivity : ComponentActivity() {
                             isConverting = isConverting,
                             progress = progress,
                             progressDetail = progressDetail,
-<<<<<<< HEAD
                             pendingRestoreCount = pendingRestoreCount,
                             onRestoreOriginals = { restoreTrashedOriginals() },
+                            outputRelPath = outputRelPath,
+                            isMovingOutputs = isMovingOutputs,
+                            onEditOutputPath = {
+                                outputPathInput = outputRelPath
+                                showOutputPathDialog = true
+                            },
+                            onMoveToCamera = { moveOutputsToCamera() },
                             onOpenFixTime = { openFixTime() },
-=======
->>>>>>> 12de02fedf9915ab9fc96da4130b949d73339acf
                             deleteOriginal = deleteOriginal,
                             onToggleDeleteOriginal = { on ->
                                 // 开启且未授予所有文件访问权限时，提示授权以去掉系统确认框
@@ -336,7 +300,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-<<<<<<< HEAD
                 // 所有文件访问权限引导（删除原图 / 修复时间功能需要时）
                 if (showAllFilesDialog) {
                     AlertDialog(
@@ -349,20 +312,6 @@ class MainActivity : ComponentActivity() {
                                 "• 转换后删除原图：删除不再弹系统确认框，被删文件会进入 vivo 相册的" +
                                 "「第三方删除拦截」，可在相册中恢复；未授权时删除走系统回收站" +
                                 "（30 天内可在本应用恢复）\n\n" +
-=======
-                // 所有文件访问权限引导（开启删除原图且未授权时）
-                if (showAllFilesDialog) {
-                    AlertDialog(
-                        onDismissRequest = { showAllFilesDialog = false },
-                        title = { Text("删除原图设置") },
-                        text = {
-                            Text(
-                                "「转换后删除原图」已开启，两种删除方式：\n\n" +
-                                "• 授予「所有文件访问权限」：删除立即执行，不再弹任何确认框" +
-                                "（注意：不进系统回收站，无法恢复）\n" +
-                                "• 不授权：每次删除前系统会弹出「移入回收站」确认框" +
-                                "（确认后 30 天内可在相册的回收站中恢复）\n\n" +
->>>>>>> 12de02fedf9915ab9fc96da4130b949d73339acf
                                 "是否前往授权？"
                             )
                         },
@@ -374,6 +323,56 @@ class MainActivity : ComponentActivity() {
                         },
                         dismissButton = {
                             OutlinedButton(onClick = { showAllFilesDialog = false }) { Text("暂不") }
+                        }
+                    )
+                }
+
+                // 输出目录修改弹窗
+                if (showOutputPathDialog) {
+                    AlertDialog(
+                        onDismissRequest = { showOutputPathDialog = false },
+                        title = { Text("输出目录") },
+                        text = {
+                            Column {
+                                Text(
+                                    "相对主存储的路径，导出的单文件实况会保存到这里；留空恢复默认。",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(Modifier.height(8.dp))
+                                OutlinedTextField(
+                                    value = outputPathInput,
+                                    onValueChange = { outputPathInput = it },
+                                    singleLine = true,
+                                    label = { Text("例如 Pictures/VLiveConvert") }
+                                )
+                            }
+                        },
+                        confirmButton = {
+                            Button(onClick = {
+                                val raw = outputPathInput.trim()
+                                if (raw.isEmpty()) {
+                                    outputRelPath = "Pictures/VLiveConvert"
+                                    getSharedPreferences("vliveconvert", MODE_PRIVATE)
+                                        .edit().putString("output_rel_path", outputRelPath).apply()
+                                    showOutputPathDialog = false
+                                    statusText = "输出目录已恢复默认：$outputRelPath"
+                                } else {
+                                    val s = sanitizeRelPath(raw)
+                                    if (s == null) {
+                                        statusText = "路径无效：不能包含 \\ : * ? \" < > | 或 ..（可留空恢复默认）"
+                                    } else {
+                                        outputRelPath = s
+                                        getSharedPreferences("vliveconvert", MODE_PRIVATE)
+                                            .edit().putString("output_rel_path", s).apply()
+                                        showOutputPathDialog = false
+                                        statusText = "输出目录已设为：$s"
+                                    }
+                                }
+                            }) { Text("确定") }
+                        },
+                        dismissButton = {
+                            OutlinedButton(onClick = { showOutputPathDialog = false }) { Text("取消") }
                         }
                     )
                 }
@@ -510,7 +509,6 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                             )
-<<<<<<< HEAD
                             // 拍摄时间优先；缺失回退文件名解析，再回退修改时间
                             val ts = when {
                                 ci.item.dateTaken > 0 -> ci.item.dateTaken
@@ -518,19 +516,13 @@ class MainActivity : ComponentActivity() {
                                     ?: (if (ci.item.dateModified > 0) ci.item.dateModified * 1000L
                                         else System.currentTimeMillis())
                             }
-=======
-                            // 拍摄时间优先；缺失回退修改时间
-                            val ts = if (ci.item.dateTaken > 0) ci.item.dateTaken
-                                     else if (ci.item.dateModified > 0) ci.item.dateModified * 1000L
-                                     else System.currentTimeMillis()
->>>>>>> 12de02fedf9915ab9fc96da4130b949d73339acf
                             exportToMediaStore(staged, ts)
                             ok.incrementAndGet()
                             // 开关开启：收集本项原图（jpg + 伴生 mp4），批次结束统一删除
                             if (deleteOriginal) collectOriginalUris(ci)
                             withContext(Dispatchers.Main) {
                                 replaceItem(ci, ci.copy(
-                                    status = "完成：已导出到相册 Pictures/VLiveConvert",
+                                    status = "完成：已导出到相册 $outputRelPath",
                                     done = true
                                 ))
                             }
@@ -560,7 +552,7 @@ class MainActivity : ComponentActivity() {
                 progress = 0f
                 progressDetail = ""
                 statusText = "转换完成：成功 ${ok.get()} 个，失败 ${fail.get()} 个" +
-                    "（输出目录：Pictures/VLiveConvert）"
+                    "（输出目录：$outputRelPath）"
                 // 删除原图开关：批次完成后一次性请求把成功项的原图移入回收站
                 if (deleteOriginal) requestDeleteOriginals(statusText)
                 // 清理暂存目录
@@ -577,7 +569,6 @@ class MainActivity : ComponentActivity() {
         if (idx >= 0) items[idx] = new
     }
 
-<<<<<<< HEAD
     // ---------- 修复文件时间 ----------
 
     /** 打开修复时间界面（需「所有文件访问权限」：未授权时引导授权，授权后自动进入） */
@@ -652,8 +643,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-=======
->>>>>>> 12de02fedf9915ab9fc96da4130b949d73339acf
     // ---------- 导出 ----------
 
     /**
@@ -669,7 +658,7 @@ class MainActivity : ComponentActivity() {
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, src.name)
             put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
-            put(MediaStore.MediaColumns.RELATIVE_PATH, "Pictures/VLiveConvert")
+            put(MediaStore.MediaColumns.RELATIVE_PATH, outputRelPath)
             put(MediaStore.MediaColumns.IS_PENDING, 1)
             put(MediaStore.MediaColumns.DATE_MODIFIED, timestamp / 1000)
             put(MediaStore.MediaColumns.DATE_TAKEN, timestamp)
@@ -696,7 +685,6 @@ class MainActivity : ComponentActivity() {
                 ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) },
                 null, null
             )
-<<<<<<< HEAD
 
             // 物理文件的 mtime 也固化为拍摄时间：系统显示的「修改时间」来自文件 mtime，
             // 只改 MediaStore 列的话会在媒体扫描时被文件 mtime 覆盖回写入时刻
@@ -720,8 +708,6 @@ class MainActivity : ComponentActivity() {
                     null, null
                 )
             } catch (_: Exception) {}
-=======
->>>>>>> 12de02fedf9915ab9fc96da4130b949d73339acf
         } catch (e: Exception) {
             try { contentResolver.delete(uri, null, null) } catch (_: Exception) {}
             throw IOException("写入相册失败：${e.message}")
@@ -786,18 +772,13 @@ class MainActivity : ComponentActivity() {
             for (uri in valid) {
                 try { if (contentResolver.delete(uri, null, null) > 0) deleted++ } catch (_: Exception) {}
             }
-<<<<<<< HEAD
             statusText = "$baseStatus；已直接删除 $deleted 个原文件" +
                 "（vivo 相册「第三方删除拦截」中可查看/恢复）"
-=======
-            statusText = "$baseStatus；已直接删除 $deleted 个原文件（含伴生视频）"
->>>>>>> 12de02fedf9915ab9fc96da4130b949d73339acf
             return
         }
         try {
             val sender = MediaStore.createTrashRequest(contentResolver, valid, true).intentSender
             pendingDeleteCount = valid.size
-<<<<<<< HEAD
             lastTrashUris = valid.map { it.toString() }
             deleteRequestLauncher.launch(IntentSenderRequest.Builder(sender).build())
         } catch (e: Exception) {
@@ -884,11 +865,158 @@ class MainActivity : ComponentActivity() {
             restoreRequestLauncher.launch(IntentSenderRequest.Builder(sender).build())
         } catch (e: Exception) {
             statusText = "恢复原图失败（${e.message}）"
-=======
-            deleteRequestLauncher.launch(IntentSenderRequest.Builder(sender).build())
+        }
+    }
+
+    // ---------- 输出目录与移动 ----------
+
+    /** 清洗用户输入的相对路径；非法返回 null */
+    private fun sanitizeRelPath(input: String): String? {
+        val s = input.trim().replace('\\', '/').trim('/')
+        if (s.isEmpty() || s.contains("..")) return null
+        if (s.split('/').any { it.isEmpty() || it == "." }) return null
+        if (Regex("""[:*?"<>|]""").containsMatchIn(s)) return null
+        return s
+    }
+
+    /** 查询指定相对路径下的全部图片（按加入时间降序；兼容带/不带尾斜杠两种存储形态） */
+    private fun queryImagesIn(relPath: String): List<MediaItem> {
+        val result = mutableListOf<MediaItem>()
+        try {
+            contentResolver.query(
+                MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL),
+                arrayOf(
+                    MediaStore.Images.Media._ID,
+                    MediaStore.Images.Media.DATA,
+                    MediaStore.Images.Media.DISPLAY_NAME,
+                    MediaStore.Images.Media.DATE_TAKEN,
+                    MediaStore.Images.Media.DATE_MODIFIED,
+                    MediaStore.Images.Media.SIZE
+                ),
+                "${MediaStore.MediaColumns.RELATIVE_PATH} IN (?,?)",
+                arrayOf("$relPath/", relPath),
+                "${MediaStore.Images.Media.DATE_ADDED} DESC"
+            )?.use { c ->
+                val iId = c.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+                val iPath = c.getColumnIndexOrThrow(MediaStore.Images.Media.DATA)
+                val iName = c.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
+                val iTaken = c.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_TAKEN)
+                val iModified = c.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_MODIFIED)
+                val iSize = c.getColumnIndexOrThrow(MediaStore.Images.Media.SIZE)
+                while (c.moveToNext()) {
+                    val path = c.getString(iPath) ?: continue
+                    result.add(MediaItem(
+                        id = c.getLong(iId),
+                        path = path,
+                        name = c.getString(iName) ?: path.substringAfterLast('/'),
+                        bucketId = 0L,
+                        dateTaken = c.getLong(iTaken),
+                        dateModified = c.getLong(iModified),
+                        size = c.getLong(iSize)
+                    ))
+                }
+            }
+        } catch (_: Exception) {}
+        return result
+    }
+
+    /** DCIM/Camera 内的唯一名（与现有文件重名时追加 (n)） */
+    private fun uniqueCameraName(displayName: String): String {
+        val taken = HashSet<String>()
+        try {
+            contentResolver.query(
+                MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL),
+                arrayOf(MediaStore.MediaColumns.DISPLAY_NAME),
+                "${MediaStore.MediaColumns.RELATIVE_PATH}=?",
+                arrayOf("DCIM/Camera/"),
+                null
+            )?.use { c ->
+                val i = c.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
+                while (c.moveToNext()) taken.add(c.getString(i) ?: "")
+            }
+        } catch (_: Exception) {}
+        if (displayName !in taken) return displayName
+        val stem = displayName.substringBeforeLast('.')
+        val ext = displayName.substringAfterLast('.', "")
+        var i = 1
+        while (true) {
+            val cand = if (ext.isEmpty()) "$stem($i)" else "$stem($i).$ext"
+            if (cand !in taken) return cand
+            i++
+        }
+    }
+
+    /**
+     * 把单个输出文件移动到 DCIM/Camera（拍摄/修改时间不变）：
+     * ① 应用是文件所有者，直接更新 RELATIVE_PATH（MediaStore 原生移动，不复制数据）；
+     * ② 失败回退：在 DCIM/Camera 插入新条目并流式复制内容，再删除原条目。
+     */
+    private fun moveOneToCamera(item: MediaItem): Boolean {
+        val newName = uniqueCameraName(item.name)
+        try {
+            val rows = contentResolver.update(
+                item.uri,
+                ContentValues().apply {
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, "DCIM/Camera")
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, newName)
+                },
+                null, null
+            )
+            if (rows > 0) return true
+        } catch (_: Exception) {}
+        var newUri: Uri? = null
+        try {
+            newUri = contentResolver.insert(
+                MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY),
+                ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, newName)
+                    put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, "DCIM/Camera")
+                    if (item.dateTaken > 0) put(MediaStore.MediaColumns.DATE_TAKEN, item.dateTaken)
+                    put(MediaStore.MediaColumns.DATE_MODIFIED, item.dateModified)
+                }
+            ) ?: return false
+            contentResolver.openOutputStream(newUri, "w")?.use { out ->
+                contentResolver.openInputStream(item.uri)?.use { input -> input.copyTo(out) }
+            } ?: throw IOException("输出流不可用")
+            contentResolver.delete(item.uri, null, null)
+            return true
         } catch (e: Exception) {
-            statusText = "$baseStatus；原图移入回收站失败（${e.message}）"
->>>>>>> 12de02fedf9915ab9fc96da4130b949d73339acf
+            newUri?.let { u -> try { contentResolver.delete(u, null, null) } catch (_: Exception) {} }
+            return false
+        }
+    }
+
+    /** 把输出目录中的全部已转换文件移动到 DCIM/Camera */
+    private fun moveOutputsToCamera() {
+        if (isMovingOutputs || isConverting) return
+        if (outputRelPath.equals("DCIM/Camera", ignoreCase = true)) {
+            statusText = "输出目录已是 DCIM/Camera，无需移动"
+            return
+        }
+        lifecycleScope.launch(Dispatchers.IO) {
+            withContext(Dispatchers.Main) { isMovingOutputs = true }
+            val items = queryImagesIn(outputRelPath)
+            if (items.isEmpty()) {
+                withContext(Dispatchers.Main) {
+                    isMovingOutputs = false
+                    statusText = "输出目录（$outputRelPath）中没有可移动的文件"
+                }
+                return@launch
+            }
+            var ok = 0
+            var fail = 0
+            for ((idx, item) in items.withIndex()) {
+                if (moveOneToCamera(item)) ok++ else fail++
+                withContext(Dispatchers.Main) {
+                    statusText = "正在移动到 DCIM/Camera…${idx + 1}/${items.size}"
+                }
+            }
+            withContext(Dispatchers.Main) {
+                isMovingOutputs = false
+                statusText = "移动完成：$ok 个文件已移到 DCIM/Camera" +
+                    (if (fail > 0) "，失败 $fail 个" else "")
+            }
         }
     }
 }
