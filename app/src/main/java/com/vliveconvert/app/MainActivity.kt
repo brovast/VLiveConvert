@@ -16,6 +16,13 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -63,6 +70,9 @@ import org.json.JSONObject
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicInteger
+
+/** 主界面栈：权限页 → 主页 → 选择器 / 修复时间（用于转场方向判定） */
+private enum class Screen { Permission, Main, Picker, FixTime }
 
 class MainActivity : ComponentActivity() {
 
@@ -239,71 +249,93 @@ class MainActivity : ComponentActivity() {
                         .fillMaxSize()
                         .background(MaterialTheme.colorScheme.background)
                 ) {
-                    if (!hasReadPermission()) {
-                        PermissionScreen(
-                            onRequest = { requestReadPermissions(null) },
-                            statusText = statusText
-                        )
-                    } else if (showPicker) {
-                        PickerScreen(
-                            albums = pickerAlbums,
-                            scanner = scanner,
-                            scannerScope = lifecycleScope,
-                            onBack = { showPicker = false },
-                            onConfirm = { picked ->
-                                showPicker = false
-                                addPickedItems(picked)
+                    // 目标界面：授权后带权限状态一起参与重组，权限授予时也有过渡动画
+                    val targetScreen = if (!hasReadPermission()) Screen.Permission
+                    else if (showPicker) Screen.Picker
+                    else if (showFixTime) Screen.FixTime
+                    else Screen.Main
+                    AnimatedContent(
+                        targetState = targetScreen,
+                        transitionSpec = {
+                            // 主页 → 选择器/修复时间：新界面自右滑入；
+                            // 返回：新界面（主页）自左淡入、旧界面滑回右侧，符合系统返回方向
+                            if (targetState == Screen.Main && initialState != Screen.Main) {
+                                (slideInHorizontally(tween(300)) { -it / 4 } +
+                                        fadeIn(tween(300))) togetherWith
+                                        (slideOutHorizontally(tween(300)) { it } +
+                                                fadeOut(tween(220)))
+                            } else {
+                                (slideInHorizontally(tween(300)) { it } +
+                                        fadeIn(tween(300))) togetherWith
+                                        (slideOutHorizontally(tween(300)) { -it / 4 } +
+                                                fadeOut(tween(220)))
                             }
-                        )
-                    } else if (showFixTime) {
-                        FixTimeScreen(
-                            albums = fixAlbums,
-                            scanner = singleLiveScanner,
-                            scannerScope = lifecycleScope,
-                            isFixing = isFixing,
-                            progress = fixProgress,
-                            statusText = fixStatus,
-                            selectionReset = fixSelectionReset,
-                            onBack = { showFixTime = false },
-                            onFix = { selected -> startFixTimes(selected) }
-                        )
-                    } else {
-                        MainScreen(
-                            items = items.toList(),
-                            statusText = statusText,
-                            isConverting = isConverting,
-                            progress = progress,
-                            progressDetail = progressDetail,
-                            pendingRestoreCount = pendingRestoreCount,
-                            onRestoreOriginals = { restoreTrashedOriginals() },
-                            outputRelPath = outputRelPath,
-                            isMovingOutputs = isMovingOutputs,
-                            onEditOutputPath = {
-                                outputPathInput = outputRelPath
-                                showOutputPathDialog = true
-                            },
-                            onMoveToCamera = { moveOutputsToCamera() },
-                            onOpenFixTime = { openFixTime() },
-                            deleteOriginal = deleteOriginal,
-                            onToggleDeleteOriginal = { on ->
-                                // 开启且未授予所有文件访问权限时，提示授权以去掉系统确认框
-                                if (on && !Environment.isExternalStorageManager()) {
-                                    showAllFilesDialog = true
+                        },
+                        label = "screenTransition"
+                    ) { screen ->
+                        when (screen) {
+                            Screen.Permission -> PermissionScreen(
+                                onRequest = { requestReadPermissions(null) },
+                                statusText = statusText
+                            )
+                            Screen.Picker -> PickerScreen(
+                                albums = pickerAlbums,
+                                scanner = scanner,
+                                scannerScope = lifecycleScope,
+                                onBack = { showPicker = false },
+                                onConfirm = { picked ->
+                                    showPicker = false
+                                    addPickedItems(picked)
                                 }
-                                deleteOriginal = on
-                                getSharedPreferences("vliveconvert", MODE_PRIVATE)
-                                    .edit().putBoolean("delete_original", on).apply()
-                            },
-                            onAddMore = { openBuiltInPicker() },
-                            onStartConvert = { startConvert() },
-                            onClearAll = {
-                                items.clear()
-                                statusText = "已清空"
-                            },
-                            onRemove = { ci ->
-                                items.removeAll { it.item.key == ci.item.key }
-                            }
-                        )
+                            )
+                            Screen.FixTime -> FixTimeScreen(
+                                albums = fixAlbums,
+                                scanner = singleLiveScanner,
+                                scannerScope = lifecycleScope,
+                                isFixing = isFixing,
+                                progress = fixProgress,
+                                statusText = fixStatus,
+                                selectionReset = fixSelectionReset,
+                                onBack = { showFixTime = false },
+                                onFix = { selected -> startFixTimes(selected) }
+                            )
+                            Screen.Main -> MainScreen(
+                                items = items.toList(),
+                                statusText = statusText,
+                                isConverting = isConverting,
+                                progress = progress,
+                                progressDetail = progressDetail,
+                                pendingRestoreCount = pendingRestoreCount,
+                                onRestoreOriginals = { restoreTrashedOriginals() },
+                                outputRelPath = outputRelPath,
+                                isMovingOutputs = isMovingOutputs,
+                                onEditOutputPath = {
+                                    outputPathInput = outputRelPath
+                                    showOutputPathDialog = true
+                                },
+                                onMoveToCamera = { moveOutputsToCamera() },
+                                onOpenFixTime = { openFixTime() },
+                                deleteOriginal = deleteOriginal,
+                                onToggleDeleteOriginal = { on ->
+                                    // 开启且未授予所有文件访问权限时，提示授权以去掉系统确认框
+                                    if (on && !Environment.isExternalStorageManager()) {
+                                        showAllFilesDialog = true
+                                    }
+                                    deleteOriginal = on
+                                    getSharedPreferences("vliveconvert", MODE_PRIVATE)
+                                        .edit().putBoolean("delete_original", on).apply()
+                                },
+                                onAddMore = { openBuiltInPicker() },
+                                onStartConvert = { startConvert() },
+                                onClearAll = {
+                                    items.clear()
+                                    statusText = "已清空"
+                                },
+                                onRemove = { ci ->
+                                    items.removeAll { it.item.key == ci.item.key }
+                                }
+                            )
+                        }
                     }
                 }
 
