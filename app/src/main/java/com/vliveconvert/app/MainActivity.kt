@@ -11,6 +11,7 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.provider.Settings
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.IntentSenderRequest
@@ -227,6 +228,12 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             VLiveConvertTheme {
+                // 系统返回键/侧滑返回：选择器与修复时间界面返回主页，主页保持默认退出行为；
+                // 转换中吞掉返回，防止误退
+                BackHandler(enabled = isConverting) { /* 转换中不响应返回 */ }
+                BackHandler(enabled = showFixTime) { showFixTime = false }
+                BackHandler(enabled = showPicker) { showPicker = false }
+
                 Box(
                     Modifier
                         .fillMaxSize()
