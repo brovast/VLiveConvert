@@ -15,6 +15,12 @@ internal class LivePhotoAsset(
     /** 来源格式标识 */
     var sourceFormat: String = "",
 ) {
+    /**
+     * [videoMp4] 中有效视频段的字节长度（不含尾部 vivoMediaExtInfo uuid）。
+     * 与数组本身分离，避免为了去掉尾部 uuid 再复制一整段视频。
+     */
+    var videoByteLength: Int = videoMp4.size
+
     /** 封面帧视频内时间戳（微秒），-1 未知 */
     var presentationTsUs: Long = -1L
 

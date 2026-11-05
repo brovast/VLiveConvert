@@ -28,6 +28,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -39,20 +40,33 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.state.ToggleableState
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.Calendar
 
 /**
- * 缩略图内存 LRU 缓存（按需加载）：
+ * 缩略图内存 LRU 缓存（按字节计）：
  * 每次仅组合屏幕可见区域附近的网格项，滚动回来命中缓存直接显示。
+ * 上限取应用堆的 1/16（8–64MB），避免大图设备上按"张数"缓存导致内存膨胀。
  */
-val thumbCache = LruCache<String, Bitmap>(96)
+val thumbCache: LruCache<String, Bitmap> =
+    object : LruCache<String, Bitmap>(thumbnailCacheBytes()) {
+        override fun sizeOf(key: String, value: Bitmap): Int = value.allocationByteCount
+    }
+
+private fun thumbnailCacheBytes(): Int {
+    val quarter = Runtime.getRuntime().maxMemory() / 16
+    return quarter.coerceIn(8L * 1024 * 1024, 64L * 1024 * 1024).toInt()
+}
 
 // 缩略图加载有界并发：限制同时进行的 ContentResolver.loadThumbnail 数量，
-// 避免快速滚动/千张列表时并发 I/O 过多拖垮主线程与磁盘
+// 避免快速滚动/千张列表时并发 I/O 过多拖垮主线程与磁盘。
+// 实际并发由设置面板控制，通过 CompositionLocal 提供。
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-val thumbDispatcher = Dispatchers.IO.limitedParallelism(4)
+val LocalThumbnailDispatcher = staticCompositionLocalOf<CoroutineDispatcher> {
+    Dispatchers.IO.limitedParallelism(4)
+}
 
 /**
  * 系统缩略图（loadThumbnail，走系统缓存不落盘）：
@@ -61,11 +75,12 @@ val thumbDispatcher = Dispatchers.IO.limitedParallelism(4)
  */
 @Composable
 fun MediaThumbnail(uri: Uri, resolver: ContentResolver, modifier: Modifier) {
-    val bitmap by produceState<Bitmap?>(null, uri) {
+    val dispatcher = LocalThumbnailDispatcher.current
+    val bitmap by produceState<Bitmap?>(null, uri, dispatcher) {
         val key = uri.toString()
         // 命中缓存（滚动回来）：直接显示，不重复加载
         thumbCache.get(key)?.let { value = it; return@produceState }
-        value = withContext(thumbDispatcher) {
+        value = withContext(dispatcher) {
             val b = try {
                 resolver.loadThumbnail(uri, Size(160, 160), null)
             } catch (_: Exception) {

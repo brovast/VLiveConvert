@@ -24,4 +24,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "VLiveConvert"
 include(":app")
+include(":glassui")
  

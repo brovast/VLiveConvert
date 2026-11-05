@@ -23,7 +23,10 @@ import java.util.concurrent.atomic.AtomicInteger
  * - 每个相册一次会话内只扫一次；未扫完切走即中断，切回重扫
  * - 结果仅存内存
  */
-class SingleLiveScanner(private val repo: MediaRepo) {
+class SingleLiveScanner(
+    private val repo: MediaRepo,
+    private val threadsProvider: () -> Int = { 4 }
+) {
 
     class ScanState {
         val results = mutableStateListOf<MediaItem>()
@@ -68,7 +71,8 @@ class SingleLiveScanner(private val repo: MediaRepo) {
             if (!currentCoroutineContext().isActive) return@launch
             if (diffRefresh(st, bucketId)) {
                 st.running = true
-                val workers = (1..SCAN_THREADS).map {
+                val threads = threadsProvider().coerceIn(1, 8)
+                val workers = (1..threads).map {
                     launch { scanWorker(st) }
                 }
                 workers.forEach { it.join() }
@@ -142,8 +146,6 @@ class SingleLiveScanner(private val repo: MediaRepo) {
     }
 
     companion object {
-        private const val SCAN_THREADS = 4
-
         /** 修改时间与目标时间差值容忍度（2 秒，文件系统秒级精度内视为一致） */
         private const val MTIME_TOLERANCE_MS = 2_000L
     }

@@ -1,48 +1,88 @@
 package com.vliveconvert.app.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.items as listItems
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.Button
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.kyant.backdrop.Backdrop
+import com.kyant.backdrop.highlight.Highlight
+import com.kyant.backdrop.shadow.Shadow
+import com.kyant.shapes.Capsule
+import com.kyant.shapes.RoundedRectangle
 import com.vliveconvert.app.picker.MediaItem
+import com.vliveconvert.app.settings.AppSettings
+import com.vliveconvert.app.settings.MainViewMode
+import com.vliveconvert.glass.GlassBackground
+import com.vliveconvert.glass.GlassBottomSheet
+import com.vliveconvert.glass.GlassCapsuleToolbar
+import com.vliveconvert.glass.GlassDefaults
+import com.vliveconvert.glass.GlassIconButton
+import com.vliveconvert.glass.GlassQuality
+import com.vliveconvert.glass.GlassScaffold
+import com.vliveconvert.glass.GlassSurface
+import com.vliveconvert.glass.GlassToolbarIcon
+import kotlinx.coroutines.delay
+import kotlin.math.roundToInt
 
 /** 转换列表中的一项（源照片 + 当前状态） */
 data class ConvertItem(
@@ -53,7 +93,7 @@ data class ConvertItem(
 )
 
 /**
- * 主界面：待转换列表 + 开始转换。
+ * 主界面：悬浮玻璃顶栏 + 胶囊工具栏 + 左右悬浮玻璃按钮 + 玻璃设置面板。
  */
 @Composable
 fun MainScreen(
@@ -64,235 +104,523 @@ fun MainScreen(
     progressDetail: String,
     pendingRestoreCount: Int,
     onRestoreOriginals: () -> Unit,
-    outputRelPath: String,
     isMovingOutputs: Boolean,
     onEditOutputPath: () -> Unit,
     onMoveToCamera: () -> Unit,
-    deleteOriginal: Boolean,
     onToggleDeleteOriginal: (Boolean) -> Unit,
     onAddMore: () -> Unit,
     onStartConvert: () -> Unit,
     onClearAll: () -> Unit,
     onOpenFixTime: () -> Unit,
-    onRemove: (ConvertItem) -> Unit
+    onRemove: (ConvertItem) -> Unit,
+    settings: AppSettings,
+    onSettingsChange: (AppSettings) -> Unit,
+    quality: GlassQuality,
+    versionName: String,
+    totalRamMb: Long
 ) {
-    Column(
-        Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-    ) {
-        // ── 顶栏 ──
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .background(MaterialTheme.colorScheme.surfaceContainer)
-                .statusBarsPadding()
-        ) {
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text("VLiveConvert", style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface)
-                    Text("vivo 双文件实况 → 单文件实况",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    if (!isConverting) {
-                        Text(
-                            "修复时间",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickableNoRipple(onOpenFixTime)
-                                .padding(horizontal = 8.dp, vertical = 4.dp)
-                        )
-                    }
-                    if (!isConverting && !isMovingOutputs) {
-                        Text(
-                            "移到相机",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickableNoRipple(onMoveToCamera)
-                                .padding(horizontal = 8.dp, vertical = 4.dp)
-                        )
-                    }
-                    if (items.isNotEmpty() && !isConverting) {
-                        Text(
-                            "清空",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickableNoRipple(onClearAll)
-                                .padding(horizontal = 8.dp, vertical = 4.dp)
-                        )
-                    }
-                }
+    val listState = rememberLazyListState()
+    val gridState = rememberLazyGridState()
+    val isGrid = settings.mainViewMode == MainViewMode.Grid
+    var showSettings by remember { mutableStateOf(false) }
+
+    // 批次结束后回到列表顶部，让用户看到最终状态（成功/失败统计）
+    var wasConverting by remember { mutableStateOf(false) }
+    LaunchedEffect(isConverting) {
+        if (wasConverting && !isConverting) {
+            runCatching {
+                if (isGrid) gridState.animateScrollToItem(0)
+                else listState.animateScrollToItem(0)
             }
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
         }
+        wasConverting = isConverting
+    }
 
-        // ── 状态条 ──
-        if (statusText.isNotEmpty()) {
-            Text(
-                statusText,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
+    // 滚动期间暂停玻璃：移除 backdrop 采样层 + 所有 blur/lens，停止后 140ms 恢复
+    var scrollPaused by remember { mutableStateOf(false) }
+    val isScrolling = if (isGrid) gridState.isScrollInProgress else listState.isScrollInProgress
+    LaunchedEffect(isScrolling) {
+        if (isScrolling) {
+            scrollPaused = true
+        } else {
+            delay(140)
+            scrollPaused = false
+        }
+    }
+    val glassActive = quality != GlassQuality.Off &&
+        !(settings.pauseGlassOnScroll && scrollPaused)
+
+    val insets = WindowInsets.safeDrawing.asPaddingValues()
+    val layoutDirection = LocalLayoutDirection.current
+    val insetTop = insets.calculateTopPadding()
+    val insetBottom = insets.calculateBottomPadding()
+    val insetStart = insets.calculateStartPadding(layoutDirection)
+    val insetEnd = insets.calculateEndPadding(layoutDirection)
+
+    val canStart = !isConverting && items.any { !it.done && !it.failed }
+
+    GlassScaffold(
+        glassEnabled = glassActive,
+        background = {
+            GlassBackground(
+                Modifier.fillMaxSize(),
+                animated = settings.animatedBackground
             )
-        }
-
-        // ── 恢复原图入口（回收站路径删除后显示，30 天内有效） ──
-        if (pendingRestoreCount > 0) {
-            Text(
-                "↩ 恢复已删除的原图（${pendingRestoreCount} 项，30 天内有效）",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 2.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .clickableNoRipple(onRestoreOriginals)
-                    .padding(horizontal = 4.dp, vertical = 4.dp)
+        },
+        content = {
+            val contentPadding = PaddingValues(
+                start = 16.dp + insetStart,
+                end = 16.dp + insetEnd,
+                top = insetTop + 148.dp,
+                bottom = insetBottom + if (isConverting) 172.dp else 112.dp
             )
-        }
-
-        // ── 列表 ──
-        Box(Modifier.weight(1f).fillMaxWidth()) {
-            if (items.isEmpty()) {
-                Column(
-                    Modifier.fillMaxSize().padding(bottom = 96.dp),
-                    verticalArrangement = Arrangement.Center,
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text("还没有选择照片", style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "点击下方「添加照片」，从相册中选择双文件实况照片\n（vivo 相机实况模式拍摄的 .jpg + .mp4 成对文件）",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                    )
-                }
-            } else {
+            if (!isGrid) {
                 LazyColumn(
+                    state = listState,
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                        start = 16.dp, end = 16.dp, top = 4.dp, bottom = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    contentPadding = contentPadding,
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    items(items, key = { it.item.key }) { ci ->
+                    if (statusText.isNotEmpty()) {
+                        item(key = "status") { StatusCard(statusText) }
+                    }
+                    if (pendingRestoreCount > 0) {
+                        item(key = "restore") {
+                            RestoreCard(pendingRestoreCount, onRestoreOriginals)
+                        }
+                    }
+                    if (items.isEmpty()) {
+                        item(key = "empty") { EmptyState(Modifier.fillParentMaxHeight(0.68f)) }
+                    }
+                    listItems(items, key = { it.item.key }) { ci ->
                         ConvertItemRow(ci = ci, onRemove = { onRemove(ci) })
                     }
                 }
+            } else {
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(3),
+                    state = gridState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = contentPadding,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (statusText.isNotEmpty()) {
+                        item(key = "status", span = { GridItemSpan(maxLineSpan) }) {
+                            StatusCard(statusText)
+                        }
+                    }
+                    if (pendingRestoreCount > 0) {
+                        item(key = "restore", span = { GridItemSpan(maxLineSpan) }) {
+                            RestoreCard(pendingRestoreCount, onRestoreOriginals)
+                        }
+                    }
+                    if (items.isEmpty()) {
+                        item(key = "empty", span = { GridItemSpan(maxLineSpan) }) {
+                            EmptyState(Modifier.fillMaxWidth().height(360.dp))
+                        }
+                    }
+                    gridItems(items, key = { it.item.key }) { ci ->
+                        ConvertItemGridCard(ci = ci, onRemove = { onRemove(ci) })
+                    }
+                }
             }
-        }
-
-        // ── 底部操作栏 ──
-        Surface(tonalElevation = 3.dp) {
+        },
+        overlays = { backdrop ->
+            // ── 悬浮顶栏 + 胶囊工具栏 ──
             Column(
                 Modifier
-                    .fillMaxWidth()
-                    .navigationBarsPadding()
-                    .padding(horizontal = 16.dp, vertical = 12.dp)
+                    .align(Alignment.TopCenter)
+                    .windowInsetsPadding(
+                        WindowInsets.safeDrawing.only(
+                            WindowInsetsSides.Top + WindowInsetsSides.Horizontal
+                        )
+                    )
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                if (isConverting) {
-                    LinearProgressIndicator(
-                        progress = { progress },
-                        modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)
-                    )
-                    Text(
-                        progressDetail,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(bottom = 6.dp)
-                    )
-                }
-                // ── 输出目录（点击修改） ──
-                Row(
-                    Modifier.fillMaxWidth().padding(bottom = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                GlassSurface(
+                    backdrop = backdrop,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedRectangle(26.dp),
+                    quality = quality,
+                    enabled = glassActive,
+                    interactive = false,
+                    surfaceColor = GlassDefaults.strongSurfaceColor(),
+                    highlight = Highlight.Default,
+                    shadow = Shadow(radius = 18.dp, color = Color.Black.copy(alpha = 0.10f))
                 ) {
-                    Text(
-                        "输出目录：$outputRelPath",
-                        style = MaterialTheme.typography.bodyMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickableNoRipple(onEditOutputPath)
-                            .padding(horizontal = 4.dp, vertical = 2.dp)
-                    )
-                    Text(
-                        "修改",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickableNoRipple(onEditOutputPath)
-                            .padding(horizontal = 6.dp, vertical = 4.dp)
-                    )
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(start = 18.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                "VLiveConvert",
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                "vivo 双文件实况 → 单文件实况",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        GlassToolbarIcon(
+                            onClick = {
+                                onSettingsChange(
+                                    settings.copy(
+                                        mainViewMode =
+                                            if (isGrid) MainViewMode.List
+                                            else MainViewMode.Grid
+                                    )
+                                )
+                            },
+                            contentDescription =
+                                if (isGrid) "切换为列表" else "切换为平铺"
+                        ) {
+                            Icon(
+                                if (isGrid) AppIcons.ViewList else AppIcons.GridView,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                        GlassToolbarIcon(
+                            onClick = { showSettings = true },
+                            contentDescription = "设置"
+                        ) {
+                            Icon(
+                                Icons.Filled.Settings,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                    }
                 }
-                // ── 转换后删除原图开关（处理中禁用，保证批次语义确定） ──
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
+
+                Spacer(Modifier.height(8.dp))
+
+                GlassCapsuleToolbar(
+                    backdrop = backdrop,
+                    quality = quality,
+                    enabled = glassActive,
+                    surfaceColor = GlassDefaults.surfaceColor()
                 ) {
-                    Column(Modifier.weight(1f)) {
-                        Text("转换后删除原图",
-                            style = MaterialTheme.typography.bodyMedium)
-                        Text(
-                            "删除原 .jpg 与伴生 .mp4（恢复方式见删除完成后的提示）",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                    GlassToolbarIcon(
+                        onClick = onOpenFixTime,
+                        contentDescription = "修复文件时间",
+                        enabled = !isConverting && !isMovingOutputs
+                    ) {
+                        Icon(
+                            AppIcons.Schedule,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(22.dp)
                         )
                     }
-                    Switch(
-                        checked = deleteOriginal,
-                        onCheckedChange = onToggleDeleteOriginal,
-                        enabled = !isConverting
-                    )
-                }
-                Spacer(Modifier.height(12.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    OutlinedButton(
-                        onClick = onAddMore,
-                        enabled = !isConverting,
-                        modifier = Modifier.weight(1f).height(46.dp)
+                    GlassToolbarIcon(
+                        onClick = onMoveToCamera,
+                        contentDescription = "移到相机相册",
+                        enabled = !isConverting && !isMovingOutputs
                     ) {
-                        Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("添加照片")
+                        Icon(
+                            AppIcons.PhotoCamera,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(22.dp)
+                        )
                     }
-                    Button(
-                        onClick = onStartConvert,
-                        enabled = !isConverting && items.any { !it.done && !it.failed },
-                        modifier = Modifier.weight(1f).height(46.dp)
+                    GlassToolbarIcon(
+                        onClick = onClearAll,
+                        contentDescription = "清空列表",
+                        enabled = items.isNotEmpty() && !isConverting
                     ) {
-                        Text(if (isConverting) "转换中…" else "开始转换")
+                        Icon(
+                            AppIcons.DeleteSweep,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(22.dp)
+                        )
                     }
                 }
             }
+
+            // ── 底部左右悬浮按钮 + 转换进度 ──
+            Column(
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .windowInsetsPadding(
+                        WindowInsets.safeDrawing.only(
+                            WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal
+                        )
+                    )
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                if (isConverting) {
+                    GlassSurface(
+                        backdrop = backdrop,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedRectangle(22.dp),
+                        quality = quality,
+                        enabled = glassActive,
+                        interactive = false,
+                        surfaceColor = GlassDefaults.strongSurfaceColor(),
+                        highlight = Highlight.Plain
+                    ) {
+                        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    progressDetail.ifEmpty { "正在转换…" },
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Text(
+                                    "${(progress.coerceIn(0f, 1f) * 100).roundToInt()}%",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            ProgressBar(progress)
+                        }
+                    }
+                    Spacer(Modifier.height(10.dp))
+                }
+
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    GlassIconButton(
+                        backdrop = backdrop,
+                        onClick = onAddMore,
+                        modifier = Modifier.size(64.dp),
+                        quality = quality,
+                        enabled = !isConverting,
+                        interactive = true,
+                        surfaceColor = GlassDefaults.surfaceColor(),
+                        shape = CircleShape
+                    ) {
+                        Icon(
+                            Icons.Filled.Add,
+                            contentDescription = "添加照片",
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(30.dp)
+                        )
+                    }
+
+                    val startTint =
+                        if (canStart || isConverting) Color(0xFF415FFF) else Color(0xFF8A8F9C)
+                    GlassIconButton(
+                        backdrop = backdrop,
+                        onClick = onStartConvert,
+                        modifier = Modifier
+                            .size(64.dp)
+                            .semantics {
+                                contentDescription =
+                                    if (isConverting) "转换中" else "开始转换"
+                            },
+                        quality = quality,
+                        enabled = canStart || isConverting,
+                        interactive = true,
+                        tint = startTint,
+                        surfaceColor = Color.White.copy(alpha = 0.10f),
+                        shape = CircleShape
+                    ) {
+                        if (isConverting) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(26.dp),
+                                strokeWidth = 2.5.dp,
+                                color = Color.White
+                            )
+                        } else {
+                            Icon(
+                                Icons.Filled.PlayArrow,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(32.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // ── 设置面板（窗口内浮层，可采样主界面 backdrop） ──
+            GlassBottomSheet(
+                visible = showSettings,
+                onDismiss = { showSettings = false },
+                backdrop = backdrop,
+                quality = quality
+            ) { sheetBackdrop ->
+                SettingsSheetContent(
+                    sheetBackdrop = sheetBackdrop,
+                    settings = settings,
+                    quality = quality,
+                    totalRamMb = totalRamMb,
+                    pendingRestoreCount = pendingRestoreCount,
+                    onSettingsChange = onSettingsChange,
+                    onEditOutputPath = onEditOutputPath,
+                    onToggleDeleteOriginal = onToggleDeleteOriginal,
+                    onRestoreOriginals = onRestoreOriginals,
+                    onClose = { showSettings = false },
+                    versionName = versionName
+                )
+            }
+        }
+    )
+}
+
+@Composable
+private fun ProgressBar(progress: Float) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(6.dp)
+            .clip(Capsule())
+            .background(GlassDefaults.trackColor())
+    ) {
+        Box(
+            Modifier
+                .fillMaxWidth(progress.coerceIn(0f, 1f))
+                .fillMaxHeight()
+                .clip(Capsule())
+                .background(
+                    Brush.horizontalGradient(
+                        listOf(Color(0xFF7C8CFF), Color(0xFF415FFF))
+                    )
+                )
+        )
+    }
+}
+
+@Composable
+private fun StatusCard(text: String) {
+    CardSurface {
+        Text(
+            text,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 5,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
+private fun RestoreCard(count: Int, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    CardSurface(
+        modifier = Modifier.clickable(
+            interactionSource = interaction,
+            indication = null,
+            onClick = onClick
+        )
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                AppIcons.Restore,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(Modifier.size(8.dp))
+            Text(
+                "恢复已删除的原图（$count 项，30 天内有效）",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.primary
+            )
         }
     }
 }
 
 @Composable
+private fun EmptyState(modifier: Modifier = Modifier) {
+    Column(
+        modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Icon(
+            AppIcons.PhotoLibrary,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
+            modifier = Modifier.size(52.dp)
+        )
+        Spacer(Modifier.height(12.dp))
+        Text(
+            "还没有选择照片",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "点击左下角「添加照片」，从相册中选择双文件实况照片\n" +
+                "（vivo 相机实况模式拍摄的 .jpg + .mp4 成对文件）",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
+@Composable
+private fun CardSurface(
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit
+) {
+    val dark = GlassDefaults.isDark()
+    val cardColor =
+        if (dark) Color(0xFF121318).copy(alpha = 0.52f)
+        else Color.White.copy(alpha = 0.62f)
+    val borderColor =
+        if (dark) Color.White.copy(alpha = 0.08f)
+        else Color.White.copy(alpha = 0.58f)
+    Box(
+        modifier
+            .fillMaxWidth()
+            .clip(RoundedRectangle(18.dp))
+            .background(cardColor)
+            .border(1.dp, borderColor, RoundedRectangle(18.dp))
+            .padding(horizontal = 14.dp, vertical = 12.dp)
+    ) {
+        content()
+    }
+}
+
+@Composable
 private fun ConvertItemRow(ci: ConvertItem, onRemove: () -> Unit) {
-    val resolver = LocalContext.current.contentResolver
-    Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        modifier = Modifier.fillMaxWidth()
+    val dark = GlassDefaults.isDark()
+    val cardColor =
+        if (dark) Color(0xFF121318).copy(alpha = 0.52f)
+        else Color.White.copy(alpha = 0.62f)
+    val borderColor =
+        if (dark) Color.White.copy(alpha = 0.08f)
+        else Color.White.copy(alpha = 0.58f)
+
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedRectangle(20.dp))
+            .background(cardColor)
+            .border(1.dp, borderColor, RoundedRectangle(20.dp))
     ) {
         Row(
             Modifier.padding(10.dp),
@@ -301,15 +629,20 @@ private fun ConvertItemRow(ci: ConvertItem, onRemove: () -> Unit) {
             Box(
                 Modifier
                     .size(56.dp)
-                    .clip(RoundedCornerShape(8.dp))
+                    .clip(RoundedRectangle(12.dp))
             ) {
-                MediaThumbnail(ci.item.uri, resolver, Modifier.fillMaxSize())
+                MediaThumbnail(
+                    ci.item.uri,
+                    androidx.compose.ui.platform.LocalContext.current.contentResolver,
+                    Modifier.fillMaxSize()
+                )
             }
-            Spacer(Modifier.width(12.dp))
+            Spacer(Modifier.size(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(
                     ci.item.name,
                     style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -324,12 +657,12 @@ private fun ConvertItemRow(ci: ConvertItem, onRemove: () -> Unit) {
                     }
                 )
             }
-            if (!isBusyStatus(ci.status)) {
+            if (ci.status != "转换中…") {
                 IconButton(onClick = onRemove) {
                     Icon(
                         Icons.Filled.Close,
                         contentDescription = "移除",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        tint = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.size(18.dp)
                     )
                 }
@@ -338,14 +671,79 @@ private fun ConvertItemRow(ci: ConvertItem, onRemove: () -> Unit) {
     }
 }
 
-/** 转换中的项目不显示移除按钮 */
-private fun isBusyStatus(status: String): Boolean = status == "转换中…"
+/** 平铺模式下的照片卡片：方形缩略图 + 文件名/状态。 */
+@Composable
+private fun ConvertItemGridCard(ci: ConvertItem, onRemove: () -> Unit) {
+    val dark = GlassDefaults.isDark()
+    val cardColor =
+        if (dark) Color(0xFF121318).copy(alpha = 0.52f)
+        else Color.White.copy(alpha = 0.62f)
+    val borderColor =
+        if (dark) Color.White.copy(alpha = 0.08f)
+        else Color.White.copy(alpha = 0.58f)
+    val resolver = LocalContext.current.contentResolver
 
-/** 无涟漪点击（文本按钮用） */
-private fun Modifier.clickableNoRipple(onClick: () -> Unit): Modifier = composed {
-    clickable(
-        interactionSource = remember { MutableInteractionSource() },
-        indication = null,
-        onClick = onClick
-    )
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedRectangle(16.dp))
+            .background(cardColor)
+            .border(1.dp, borderColor, RoundedRectangle(16.dp))
+    ) {
+        Column {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(1f)
+                    .clip(RoundedRectangle(14.dp))
+            ) {
+                MediaThumbnail(ci.item.uri, resolver, Modifier.fillMaxSize())
+                if (ci.status != "转换中…") {
+                    val interaction = remember { MutableInteractionSource() }
+                    Box(
+                        Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(4.dp)
+                            .size(24.dp)
+                            .clip(CircleShape)
+                            .background(Color.Black.copy(alpha = 0.38f))
+                            .clickable(
+                                interactionSource = interaction,
+                                indication = null,
+                                onClick = onRemove
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Filled.Close,
+                            contentDescription = "移除",
+                            tint = Color.White,
+                            modifier = Modifier.size(13.dp)
+                        )
+                    }
+                }
+            }
+            Column(Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
+                Text(
+                    ci.item.name,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    ci.status,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = when {
+                        ci.failed -> MaterialTheme.colorScheme.error
+                        ci.done -> MaterialTheme.colorScheme.primary
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
 }

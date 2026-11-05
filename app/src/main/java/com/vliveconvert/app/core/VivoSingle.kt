@@ -1,6 +1,8 @@
 package com.vliveconvert.app.core
 
+import java.io.BufferedOutputStream
 import java.io.File
+import java.io.FileOutputStream
 
 /**
  * vivo 单文件实况照片写出。
@@ -31,16 +33,27 @@ internal object VivoSingle {
         //   - vivoMediaEStream：vivo 相册识别「实况视频」的关键标识 → 必须保留
         //   - vivoMediaExtInfo：其内容即源 cameralbum footer（双文件 mp4 自带的旧 footer）→ 必须剥掉，
         //     否则视频段会内嵌一个 cameralbum footer，与尾部 convert footer 重复，破坏识别。
-        var video = Mp4Util.stripVivoUuid(asset.videoMp4)
+        // 不复制整段视频：只记录有效长度，写出时按 [0, videoSize) 截取。
+        val videoSource = asset.videoMp4
+        val videoEnd = asset.videoByteLength.coerceIn(0, videoSource.size)
+        var video = videoSource
+        var videoSize = videoEnd
 
         // ── 2. 插入 lpex (LivePhotoExtension) box 到 moov ──
         // 实测「可被 vivo 相册识别」的输出视频流里带 lpex box；缺 lpex → 不被识别。
-        if (video.size >= 8) {
-            val searchEnd = minOf(65536, video.size)
+        if (videoEnd >= 8) {
+            val searchEnd = minOf(65536, videoEnd)
             val lpexMarker = byteArrayOf(0x6C, 0x70, 0x65, 0x78) // "lpex"
-            if (BinaryUtils.indexOf(video.copyOfRange(0, searchEnd), lpexMarker) < 0) {
+            val lpexIndex = BinaryUtils.indexOf(videoSource, lpexMarker)
+            if (lpexIndex < 0 || lpexIndex >= searchEnd) {
                 try {
-                    video = Mp4Util.insertBoxIntoMoov(video, "lpex", buildLpexPayload(asset))
+                    video = Mp4Util.insertBoxIntoMoov(
+                        data = videoSource,
+                        boxType = "lpex",
+                        payload = buildLpexPayload(asset),
+                        sourceEnd = videoEnd
+                    )
+                    videoSize = video.size
                     log("info", "已合成 lpex box（LivePhotoExtension）插入 moov", "vivo")
                 } catch (ex: Exception) {
                     log("warning", "lpex 合成失败，跳过（不影响播放）：${ex.message}", "vivo")
@@ -72,33 +85,42 @@ internal object VivoSingle {
 
         // ── 4. XMP：视频项 Item:Length = video + footer（已被验证可识别） ──
         val pts = asset.effectivePtsUs()
-        val xmp = XmpTemplate.buildVivoSingleXmp(pts, asset.gainmapLength, video.size + footer.size)
+        val xmp = XmpTemplate.buildVivoSingleXmp(pts, asset.gainmapLength, videoSize + footer.size)
         val primary = JpegUtil.replaceOrInsertXmp(asset.primaryJpeg, xmp)
 
-        // ── 5. 拼装输出：[JPEG+XMP][GainMap][streamdata][video(含 lpex)][convert footer] ──
+        // ── 5. 流式写出：[JPEG+XMP][GainMap][streamdata][video(含 lpex)][convert footer] ──
         // streamdata 附加块紧跟图像数据（与双文件中的位置一致）：普通实况为流信息，
         // 人像实况为深度/虚化数据流，相册靠它保留人像徽标与光圈/虚化后编辑。
+        // 不再拼接整个输出大数组，避免单张转换出现 2~3 倍的瞬时内存峰值。
         val streamData = asset.extras["vivo_streamdata"] as? ByteArray ?: ByteArray(0)
-        val gainmapLen = asset.gainmapJpeg?.size ?: 0
-        val output = ByteArray(primary.size + gainmapLen + streamData.size + video.size + footer.size)
-        var pos = 0
-        System.arraycopy(primary, 0, output, pos, primary.size); pos += primary.size
-        asset.gainmapJpeg?.let { System.arraycopy(it, 0, output, pos, it.size); pos += it.size }
-        if (streamData.isNotEmpty()) {
-            System.arraycopy(streamData, 0, output, pos, streamData.size); pos += streamData.size
-        }
-        System.arraycopy(video, 0, output, pos, video.size); pos += video.size
-        System.arraycopy(footer, 0, output, pos, footer.size)
+        val outFile = File(outDir, "$stem.jpg")
+        val tmpFile = File(outDir, "$stem.jpg.tmp")
+        outFile.parentFile?.mkdirs()
 
-        // vivo 相册自己的合并文件不带 _MP 后缀，保持一致
-        val outPath = File(outDir, "$stem.jpg").path
-        File(outDir).mkdirs()
-        File(outPath).writeBytes(output)
-        log("info", "写出 vivo 单文件实况：${File(outPath).name}" +
-            "（图像 ${primary.size}B + 视频 ${video.size}B（含 lpex）" +
+        try {
+            BufferedOutputStream(FileOutputStream(tmpFile)).use { out ->
+                out.write(primary)
+                asset.gainmapJpeg?.let { out.write(it) }
+                if (streamData.isNotEmpty()) out.write(streamData)
+                out.write(video, 0, videoSize)
+                out.write(footer)
+                out.flush()
+            }
+            // 先写临时文件再原子改名：中途崩溃/被杀不会留下半成品
+            if (!tmpFile.renameTo(outFile)) {
+                tmpFile.copyTo(outFile, overwrite = true)
+                tmpFile.delete()
+            }
+        } catch (e: Exception) {
+            try { tmpFile.delete() } catch (_: Exception) {}
+            throw e
+        }
+
+        log("info", "写出 vivo 单文件实况：${outFile.name}" +
+            "（图像 ${primary.size}B + 视频 ${videoSize}B（含 lpex）" +
             (if (streamData.isNotEmpty()) " + streamdata ${streamData.size}B" else "") +
             " + footer ${footer.size}B）", "vivo")
-        return outPath
+        return outFile.path
     }
 
     /**

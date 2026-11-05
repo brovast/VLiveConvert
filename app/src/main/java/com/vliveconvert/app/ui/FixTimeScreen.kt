@@ -18,14 +18,22 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
@@ -37,6 +45,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
@@ -50,6 +59,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -62,22 +72,37 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.lerp
 import androidx.compose.ui.unit.sp
+import com.kyant.backdrop.highlight.Highlight
+import com.kyant.backdrop.shadow.Shadow
+import com.kyant.shapes.Capsule
+import com.kyant.shapes.RoundedRectangle
 import com.vliveconvert.app.core.PhotoTime
 import com.vliveconvert.app.picker.AlbumInfo
 import com.vliveconvert.app.picker.MediaItem
 import com.vliveconvert.app.picker.SingleLiveScanner
+import com.vliveconvert.glass.GlassBackground
+import com.vliveconvert.glass.GlassDefaults
+import com.vliveconvert.glass.GlassIconButton
+import com.vliveconvert.glass.GlassQuality
+import com.vliveconvert.glass.GlassScaffold
+import com.vliveconvert.glass.GlassSurface
+import com.vliveconvert.glass.GlassToolbarIcon
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.roundToInt
 
 /**
  * 修复文件时间界面（与双文件选择器同一套相册式交互）：
@@ -95,7 +120,9 @@ fun FixTimeScreen(
     statusText: String,
     selectionReset: Int,
     onBack: () -> Unit,
-    onFix: (List<MediaItem>) -> Unit
+    onFix: (List<MediaItem>) -> Unit,
+    quality: GlassQuality,
+    pauseGlassOnScroll: Boolean
 ) {
     var currentBucketId by remember { mutableStateOf(albums.firstOrNull()?.bucketId) }
     val bucketId = currentBucketId
@@ -141,201 +168,376 @@ fun FixTimeScreen(
         }
     }
 
-    Column(
-        Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-    ) {
-        // ── 顶栏 ──
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .background(MaterialTheme.colorScheme.surfaceContainer)
-                .statusBarsPadding()
-        ) {
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回",
-                        tint = MaterialTheme.colorScheme.onSurface)
-                }
-                Column(Modifier.weight(1f)) {
-                    Text("修复文件时间", style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurface)
-                    Text("按文件名中的拍摄时间修正「修改时间」",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-            // 相册 chip 横滑条
-            if (albums.size > 1) {
-                LazyRow(
-                    Modifier.padding(vertical = 8.dp),
-                    contentPadding = PaddingValues(start = 12.dp, end = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    items(albums, key = { it.bucketId }) { album ->
-                        AlbumChip(
-                            album = album,
-                            selected = album.bucketId == bucketId,
-                            onClick = { currentBucketId = album.bucketId }
+    val gridState = rememberLazyGridState()
+    var scrollPaused by remember { mutableStateOf(false) }
+    LaunchedEffect(gridState.isScrollInProgress) {
+        if (gridState.isScrollInProgress) scrollPaused = true
+        else {
+            delay(140)
+            scrollPaused = false
+        }
+    }
+    val glassActive = quality != GlassQuality.Off &&
+        !(pauseGlassOnScroll && scrollPaused)
+
+    val insets = WindowInsets.safeDrawing.asPaddingValues()
+    val layoutDirection = LocalLayoutDirection.current
+    val insetTop = insets.calculateTopPadding()
+    val insetBottom = insets.calculateBottomPadding()
+    val insetStart = insets.calculateStartPadding(layoutDirection)
+    val insetEnd = insets.calculateEndPadding(layoutDirection)
+
+    val density = LocalDensity.current
+    var panelHeightPx by remember { mutableIntStateOf(with(density) { 160.dp.roundToPx() }) }
+    val panelHeightDp = with(density) { panelHeightPx.toDp() }
+
+    GlassScaffold(
+        glassEnabled = glassActive,
+        background = { GlassBackground(Modifier.fillMaxSize()) },
+        content = {
+            Box(Modifier.fillMaxSize()) {
+                when {
+                    results == null -> Box(
+                        Modifier.fillMaxSize()
+                            .padding(top = insetTop + 120.dp, bottom = insetBottom + 100.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("没有可用相册", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+
+                    results.isEmpty() && !scanning -> Column(
+                        Modifier.fillMaxSize()
+                            .padding(top = insetTop + 120.dp, bottom = insetBottom + 100.dp),
+                        verticalArrangement = Arrangement.Center,
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            "没有待修复的单文件实况",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "仅显示修改时间与照片时间不一致的单文件实况；已一致的不会出现",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                }
-            }
-            AnimatedVisibility(visible = scanning) {
-                LinearProgressIndicator(
-                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)
-                )
-            }
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-        }
 
-        // ── 工具行 ──
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                if (scanning) "扫描中 ${scanProgress.first}/$total" else "${results?.size ?: 0} 个单文件实况",
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(Modifier.weight(1f))
-            val allSel = n > 0 && displayOrder.all { g -> selected.any { it.id == g.id } }
-            val someSel = displayOrder.any { g -> selected.any { it.id == g.id } }
-            Text("全选", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.size(4.dp))
-            CircleTriCheckbox(
-                state = when {
-                    allSel -> ToggleableState.On
-                    someSel -> ToggleableState.Indeterminate
-                    else -> ToggleableState.Off
-                },
-                onClick = { if (n > 0) toggleGroup(displayOrder) }
-            )
-        }
-
-        // ── 状态条 ──
-        if (statusText.isNotEmpty()) {
-            Text(
-                statusText,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)
-            )
-        }
-
-        // ── 网格 ──
-        Box(Modifier.weight(1f).fillMaxWidth().clipToBounds()) {
-            when {
-                results == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("没有可用相册", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                results.isEmpty() && !scanning -> Column(
-                    Modifier.fillMaxSize().padding(bottom = 48.dp),
-                    verticalArrangement = Arrangement.Center,
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text("没有待修复的单文件实况", style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.height(4.dp))
-                    Text("仅显示修改时间与照片时间不一致的单文件实况；已一致的不会出现",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                else -> LazyVerticalGrid(
-                    state = rememberLazyGridState(),
-                    columns = GridCells.Fixed(3),
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(horizontal = 2.dp),
-                    horizontalArrangement = Arrangement.spacedBy(2.dp),
-                    verticalArrangement = Arrangement.spacedBy(2.dp)
-                ) {
-                    val sorted = results.sortedByDescending { it.sortTime }
-                    val groups = sorted.groupBy { dateKey(it.sortTime) }
-                    for ((dk, groupItems) in groups) {
-                        stickyHeader(key = "hdr_$dk") {
-                            val allSel = groupItems.all { g -> selected.any { it.id == g.id } }
-                            val someSel = groupItems.any { g -> selected.any { it.id == g.id } }
-                            Row(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .background(MaterialTheme.colorScheme.background)
-                                    .padding(start = 12.dp, end = 10.dp, top = 2.dp, bottom = 2.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    dateLabel(groupItems.first().sortTime),
-                                    style = MaterialTheme.typography.labelLarge,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                CircleTriCheckbox(
-                                    state = when {
-                                        allSel -> ToggleableState.On
-                                        someSel -> ToggleableState.Indeterminate
-                                        else -> ToggleableState.Off
-                                    },
-                                    onClick = { toggleGroup(groupItems) }
+                    else -> LazyVerticalGrid(
+                        state = gridState,
+                        columns = GridCells.Fixed(3),
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(
+                            start = 2.dp + insetStart,
+                            end = 2.dp + insetEnd,
+                            top = insetTop + panelHeightDp + 16.dp,
+                            bottom = insetBottom + if (isFixing) 170.dp else 88.dp
+                        ),
+                        horizontalArrangement = Arrangement.spacedBy(2.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        val sorted = results.sortedByDescending { it.sortTime }
+                        val groups = sorted.groupBy { dateKey(it.sortTime) }
+                        for ((dk, groupItems) in groups) {
+                            item(key = "hdr_$dk", span = { GridItemSpan(maxLineSpan) }) {
+                                val allSel = groupItems.all { g -> selected.any { it.id == g.id } }
+                                val someSel = groupItems.any { g -> selected.any { it.id == g.id } }
+                                Row(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .background(
+                                            MaterialTheme.colorScheme.background.copy(alpha = 0.86f)
+                                        )
+                                        .padding(start = 12.dp, end = 10.dp, top = 2.dp, bottom = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        dateLabel(groupItems.first().sortTime),
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    CircleTriCheckbox(
+                                        state = when {
+                                            allSel -> ToggleableState.On
+                                            someSel -> ToggleableState.Indeterminate
+                                            else -> ToggleableState.Off
+                                        },
+                                        onClick = { toggleGroup(groupItems) }
+                                    )
+                                }
+                            }
+                            items(groupItems, key = { it.key }) { item ->
+                                FixCell(
+                                    item = item,
+                                    selected = selected.any { it.id == item.id },
+                                    onToggle = { toggleItem(item) }
                                 )
                             }
                         }
-                        items(groupItems, key = { it.key }) { item ->
-                            FixCell(
-                                item = item,
-                                selected = selected.any { it.id == item.id },
-                                onToggle = { toggleItem(item) }
+                        if (scanning) {
+                            item(span = { GridItemSpan(maxLineSpan) }) {
+                                Box(
+                                    Modifier.fillMaxWidth().padding(vertical = 20.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    CircularProgressIndicator(strokeWidth = 3.dp)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        overlays = { backdrop ->
+            // ── 沉浸式悬浮顶栏：标题 + 相册 chips + 扫描/全选/状态 ──
+            Column(
+                Modifier
+                    .align(Alignment.TopCenter)
+                    .windowInsetsPadding(
+                        WindowInsets.safeDrawing.only(
+                            WindowInsetsSides.Top + WindowInsetsSides.Horizontal
+                        )
+                    )
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            ) {
+                GlassSurface(
+                    backdrop = backdrop,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onSizeChanged { panelHeightPx = it.height },
+                    shape = RoundedRectangle(26.dp),
+                    quality = quality,
+                    enabled = glassActive,
+                    interactive = false,
+                    surfaceColor = GlassDefaults.strongSurfaceColor(),
+                    highlight = Highlight.Default,
+                    shadow = Shadow(radius = 18.dp, color = Color.Black.copy(alpha = 0.10f))
+                ) {
+                    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(start = 4.dp, end = 16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            GlassToolbarIcon(onClick = onBack, contentDescription = "返回") {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    "修复文件时间",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    "按文件名中的拍摄时间修正「修改时间」",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            Text(
+                                "${results?.size ?: 0} 项",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+
+                        if (albums.size > 1) {
+                            LazyRow(
+                                Modifier.padding(vertical = 4.dp),
+                                contentPadding = PaddingValues(horizontal = 12.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                items(albums, key = { it.bucketId }) { album ->
+                                    AlbumChip(
+                                        album = album,
+                                        selected = album.bucketId == bucketId,
+                                        onClick = { currentBucketId = album.bucketId }
+                                    )
+                                }
+                            }
+                        }
+
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                if (scanning) "扫描中 ${scanProgress.first}/$total"
+                                else "${results?.size ?: 0} 个单文件实况",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(Modifier.weight(1f))
+                            val allSel = n > 0 && displayOrder.all { g -> selected.any { it.id == g.id } }
+                            val someSel = displayOrder.any { g -> selected.any { it.id == g.id } }
+                            Text(
+                                "全选",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(Modifier.size(4.dp))
+                            CircleTriCheckbox(
+                                state = when {
+                                    allSel -> ToggleableState.On
+                                    someSel -> ToggleableState.Indeterminate
+                                    else -> ToggleableState.Off
+                                },
+                                onClick = { if (n > 0) toggleGroup(displayOrder) }
+                            )
+                        }
+
+                        if (statusText.isNotEmpty()) {
+                            Text(
+                                statusText,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp)
+                                    .padding(bottom = 4.dp)
+                            )
+                        }
+
+                        if (scanning) {
+                            LinearProgressIndicator(
+                                progress = {
+                                    scanProgress.first / total.coerceAtLeast(1).toFloat()
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 4.dp),
+                                color = MaterialTheme.colorScheme.primary,
+                                trackColor = GlassDefaults.trackColor()
                             )
                         }
                     }
-                    if (scanning) {
-                        item(span = { GridItemSpan(3) }) {
-                            Box(
-                                Modifier.fillMaxWidth().padding(vertical = 20.dp),
-                                contentAlignment = Alignment.Center
+                }
+            }
+
+            // ── 悬浮底部：进度 + 已选数量 + 圆形勾选按钮 ──
+            Column(
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .windowInsetsPadding(
+                        WindowInsets.safeDrawing.only(
+                            WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal
+                        )
+                    )
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                if (isFixing) {
+                    GlassSurface(
+                        backdrop = backdrop,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedRectangle(22.dp),
+                        quality = quality,
+                        enabled = glassActive,
+                        interactive = false,
+                        surfaceColor = GlassDefaults.strongSurfaceColor(),
+                        highlight = Highlight.Plain
+                    ) {
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 12.dp)
+                        ) {
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                CircularProgressIndicator(strokeWidth = 3.dp)
+                                Text(
+                                    "正在修复时间…",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Text(
+                                    "${(progress.coerceIn(0f, 1f) * 100).roundToInt()}%",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
                             }
+                            Spacer(Modifier.height(6.dp))
+                            LinearProgressIndicator(
+                                progress = { progress },
+                                modifier = Modifier.fillMaxWidth(),
+                                color = MaterialTheme.colorScheme.primary,
+                                trackColor = GlassDefaults.trackColor()
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(10.dp))
+                }
+
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    GlassSurface(
+                        backdrop = backdrop,
+                        shape = Capsule(),
+                        quality = quality,
+                        enabled = glassActive,
+                        interactive = false,
+                        surfaceColor = GlassDefaults.strongSurfaceColor(),
+                        highlight = Highlight.Plain,
+                        shadow = Shadow(radius = 12.dp, color = Color.Black.copy(alpha = 0.10f))
+                    ) {
+                        Text(
+                            if (selected.isEmpty()) "未选择照片"
+                            else "已选 ${selected.size} 项",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp)
+                        )
+                    }
+
+                    val canFix = selected.isNotEmpty() && !isFixing
+                    GlassIconButton(
+                        backdrop = backdrop,
+                        onClick = { onFix(selected.toList()) },
+                        modifier = Modifier.size(64.dp),
+                        quality = quality,
+                        enabled = canFix || isFixing,
+                        interactive = true,
+                        tint = if (selected.isNotEmpty()) Color(0xFF415FFF) else Color(0xFF8A8F9C),
+                        surfaceColor = Color.White.copy(alpha = 0.10f),
+                        shape = CircleShape
+                    ) {
+                        if (isFixing) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(26.dp),
+                                strokeWidth = 2.5.dp,
+                                color = Color.White
+                            )
+                        } else {
+                            Icon(
+                                Icons.Filled.Check,
+                                contentDescription = "修复所选时间",
+                                tint = Color.White,
+                                modifier = Modifier.size(30.dp)
+                            )
                         }
                     }
                 }
             }
         }
-
-        // ── 底栏 ──
-        Surface(tonalElevation = 3.dp) {
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .navigationBarsPadding()
-                    .padding(horizontal = 16.dp, vertical = 12.dp)
-            ) {
-                if (isFixing) {
-                    LinearProgressIndicator(
-                        progress = { progress },
-                        modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)
-                    )
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        if (selected.isEmpty()) "" else "已选 ${selected.size} 项",
-                        modifier = Modifier.weight(1f),
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Button(
-                        onClick = { onFix(selected.toList()) },
-                        enabled = selected.isNotEmpty() && !isFixing
-                    ) { Text(if (isFixing) "修复中…" else "修复所选时间") }
-                }
-            }
-        }
-    }
+    )
 }
 
 @Composable

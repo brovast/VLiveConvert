@@ -13,3 +13,9 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# 第三方参考仓库 / 本地 demo（不纳入版本控制）
+AndroidLiquidGlass/
+
+# 所有模块的构建产物
+**/build/

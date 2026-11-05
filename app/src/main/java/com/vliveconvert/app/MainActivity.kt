@@ -1,6 +1,7 @@
 package com.vliveconvert.app
 
 import android.Manifest
+import android.app.ActivityManager
 import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -10,6 +11,7 @@ import android.os.Bundle
 import android.os.Environment
 import android.provider.MediaStore
 import android.provider.Settings
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -35,6 +37,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -46,7 +50,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
-import com.vliveconvert.app.convert.Converter
+import com.vliveconvert.app.convert.ConversionScheduler
 import com.vliveconvert.app.core.PhotoTime
 import com.vliveconvert.app.picker.AlbumInfo
 import com.vliveconvert.app.picker.MediaItem
@@ -54,26 +58,31 @@ import com.vliveconvert.app.picker.MediaRepo
 import com.vliveconvert.app.picker.PickerScanner
 import com.vliveconvert.app.picker.PickerScreen
 import com.vliveconvert.app.picker.SingleLiveScanner
+import com.vliveconvert.app.settings.AppSettings
+import com.vliveconvert.app.settings.SettingsStore
 import com.vliveconvert.app.ui.ConvertItem
 import com.vliveconvert.app.ui.FixTimeScreen
+import com.vliveconvert.app.ui.LocalThumbnailDispatcher
 import com.vliveconvert.app.ui.MainScreen
 import com.vliveconvert.app.ui.PermissionScreen
 import com.vliveconvert.app.ui.theme.VLiveConvertTheme
+import com.vliveconvert.glass.GlassQuality
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
-import java.util.concurrent.atomic.AtomicInteger
 
 /** 主界面栈：权限页 → 主页 → 选择器 / 修复时间（用于转场方向判定） */
 private enum class Screen { Permission, Main, Picker, FixTime }
 
+/** 单次 MediaStore 回收站/恢复事务的 URI 上限（大批量分批提交） */
+private const val TRASH_BATCH_SIZE = 150
+
+@OptIn(ExperimentalCoroutinesApi::class)
 class MainActivity : ComponentActivity() {
 
     // ---------- 状态 ----------
@@ -82,6 +91,13 @@ class MainActivity : ComponentActivity() {
     private var isConverting by mutableStateOf(false)
     private var progress by mutableFloatStateOf(0f)
     private var progressDetail by mutableStateOf("")
+
+    // 设置（性能 / 玻璃特效 / 输出）
+    private lateinit var settingsStore: SettingsStore
+    private var appSettings by mutableStateOf(AppSettings())
+    private var isLowRamDevice = false
+    private var totalRamMb = 0L
+    private var versionName = ""
 
     // 内置选择器
     private lateinit var mediaRepo: MediaRepo
@@ -98,14 +114,20 @@ class MainActivity : ComponentActivity() {
     // 所有文件访问权限授予后要执行的动作（如进入修复时间界面）
     private var pendingAfterAllFiles: (() -> Unit)? = null
 
-    // 转换后删除原图（持久化开关）
-    private var deleteOriginal by mutableStateOf(false)
+    // 转换后删除原图（由 appSettings.deleteOriginal 控制）
     /** 本批次成功后待删除的原图 URI（jpg + 伴生 mp4） */
     private val pendingDeleteUris = java.util.Collections.synchronizedList(mutableListOf<Uri>())
     private var deleteBaseStatus = ""
-    private var pendingDeleteCount = 0
     /** 本次待写入回收站的 URI（确认成功后转持久化恢复记录） */
     private var lastTrashUris: List<String> = emptyList()
+    /** 大批量删除/恢复分批提交，避免一次系统事务携带过多 URI */
+    private val trashQueue = ArrayDeque<List<Uri>>()
+    private var trashTotalCount = 0
+    private var trashDoneCount = 0
+    private val restoreQueue = ArrayDeque<List<Uri>>()
+    private var restoreTotalCount = 0
+    private var restoreDoneCount = 0
+    private var restoreCurrentBatchSize = 0
     /** 回收站中的原图记录数（未授权所有文件访问的删除路径），应用内可恢复（30 天内） */
     private var pendingRestoreCount by mutableIntStateOf(0)
 
@@ -121,8 +143,7 @@ class MainActivity : ComponentActivity() {
     private var fixProgress by mutableFloatStateOf(0f)
     private var fixSelectionReset by mutableIntStateOf(0)
 
-    // 自定义输出目录（MediaStore 相对路径，默认 Pictures/VLiveConvert）
-    private var outputRelPath by mutableStateOf("Pictures/VLiveConvert")
+    // 自定义输出目录（由 appSettings.outputRelPath 控制）
     private var showOutputPathDialog by mutableStateOf(false)
     private var outputPathInput by mutableStateOf("")
     // 输出文件批量移动到 DCIM/Camera
@@ -169,7 +190,7 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.StartActivityForResult()
     ) { if (hasReadPermission()) statusText = "已获得读取照片和视频权限" }
 
-    // 删除原图：系统回收站工具（createTrashRequest）结果回调——整批仅一次请求
+    // 删除原图：系统回收站工具（createTrashRequest）结果回调，按批继续
     private val deleteRequestLauncher = registerForActivityResult(
         ActivityResultContracts.StartIntentSenderForResult()
     ) { result ->
@@ -177,26 +198,53 @@ class MainActivity : ComponentActivity() {
             // 记录本批被回收的原图，供应用内「恢复原图」撤销（vivo 相册不显示此类项目）
             if (lastTrashUris.isNotEmpty()) {
                 addTrashedRecords(lastTrashUris)
+                trashDoneCount += lastTrashUris.size
                 lastTrashUris = emptyList()
                 refreshRestoreCount()
             }
-            statusText = "$deleteBaseStatus；原图已移入系统回收站（$pendingDeleteCount 项，" +
-                "以隐藏形式保留 30 天，可在本应用「恢复原图」）"
+            val next = trashQueue.removeFirstOrNull()
+            if (next != null) {
+                launchTrashBatch(next)
+            } else {
+                statusText = "$deleteBaseStatus；原图已移入系统回收站（$trashDoneCount 项，" +
+                    "以隐藏形式保留 30 天，可在本应用「恢复原图」）"
+                trashDoneCount = 0
+                trashTotalCount = 0
+            }
         } else {
-            statusText = "$deleteBaseStatus；已取消删除原图"
+            statusText = "$deleteBaseStatus；已取消删除原图" +
+                (if (trashTotalCount > 0) "（已处理 $trashDoneCount / $trashTotalCount 项）" else "")
+            lastTrashUris = emptyList()
+            trashQueue.clear()
+            trashDoneCount = 0
+            trashTotalCount = 0
         }
         pendingDeleteUris.clear()
     }
 
-    // 恢复原图：系统确认弹窗（createTrashRequest(uris, false)）结果回调
+    // 恢复原图：系统确认弹窗（createTrashRequest(uris, false)）结果回调，按批继续
     private val restoreRequestLauncher = registerForActivityResult(
         ActivityResultContracts.StartIntentSenderForResult()
     ) { result ->
         if (result.resultCode == RESULT_OK) {
-            val n = clearTrashedRecords()
-            statusText = "已恢复 $n 项原图到原位置"
+            restoreDoneCount += restoreCurrentBatchSize
+            val next = restoreQueue.removeFirstOrNull()
+            if (next != null) {
+                launchRestoreBatch(next)
+            } else {
+                clearTrashedRecords()
+                statusText = "已恢复 $restoreDoneCount 项原图到原位置"
+                restoreDoneCount = 0
+                restoreTotalCount = 0
+                restoreCurrentBatchSize = 0
+            }
         } else {
-            statusText = "已取消恢复原图"
+            statusText = "已取消恢复原图" +
+                (if (restoreTotalCount > 0) "（已恢复 $restoreDoneCount / $restoreTotalCount 项）" else "")
+            restoreQueue.clear()
+            restoreDoneCount = 0
+            restoreTotalCount = 0
+            restoreCurrentBatchSize = 0
         }
     }
 
@@ -221,23 +269,49 @@ class MainActivity : ComponentActivity() {
         tempOutDir = File(cacheDir, "output").apply { mkdirs() }
         // 启动时清理上次残留的暂存产物
         lifecycleScope.launch(Dispatchers.IO) {
-            try { tempOutDir.listFiles()?.forEach { it.delete() } } catch (_: Exception) {}
+            try { tempOutDir.listFiles()?.forEach { it.deleteRecursively() } } catch (_: Exception) {}
         }
 
         mediaRepo = MediaRepo(contentResolver)
-        scanner = PickerScanner(mediaRepo)
-        singleLiveScanner = SingleLiveScanner(mediaRepo)
+        scanner = PickerScanner(mediaRepo) { appSettings.scanThreads }
+        singleLiveScanner = SingleLiveScanner(mediaRepo) { appSettings.scanThreads }
 
-        // 恢复删除原图开关 + 刷新可恢复记录数
-        deleteOriginal = getSharedPreferences("vliveconvert", MODE_PRIVATE)
-            .getBoolean("delete_original", false)
+        settingsStore = SettingsStore(this)
+        appSettings = settingsStore.load()
+        val activityManager = getSystemService(ActivityManager::class.java)
+        isLowRamDevice = activityManager?.isLowRamDevice == true
+        if (activityManager != null) {
+            val memInfo = ActivityManager.MemoryInfo()
+            activityManager.getMemoryInfo(memInfo)
+            totalRamMb = memInfo.totalMem / (1024L * 1024L)
+        }
+        versionName = try {
+            packageManager.getPackageInfo(packageName, 0).versionName ?: ""
+        } catch (_: Exception) {
+            ""
+        }
         refreshRestoreCount()
-        // 恢复自定义输出目录
-        outputRelPath = getSharedPreferences("vliveconvert", MODE_PRIVATE)
-            .getString("output_rel_path", "Pictures/VLiveConvert") ?: "Pictures/VLiveConvert"
 
         setContent {
-            VLiveConvertTheme {
+            val thumbnailDispatcher = remember(appSettings.thumbnailThreads) {
+                Dispatchers.IO.limitedParallelism(appSettings.thumbnailThreads)
+            }
+            val glassQuality: GlassQuality =
+                appSettings.resolveGlassQuality(isLowRamDevice)
+
+            DisposableEffect(isConverting, appSettings.keepScreenOn) {
+                if (isConverting && appSettings.keepScreenOn) {
+                    window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                }
+                onDispose {
+                    window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                }
+            }
+
+            CompositionLocalProvider(
+                LocalThumbnailDispatcher provides thumbnailDispatcher
+            ) {
+                VLiveConvertTheme {
                 // 系统返回键/侧滑返回：选择器与修复时间界面返回主页，主页保持默认退出行为；
                 // 转换中吞掉返回，防止误退
                 BackHandler(enabled = isConverting) { /* 转换中不响应返回 */ }
@@ -276,7 +350,8 @@ class MainActivity : ComponentActivity() {
                         when (screen) {
                             Screen.Permission -> PermissionScreen(
                                 onRequest = { requestReadPermissions(null) },
-                                statusText = statusText
+                                statusText = statusText,
+                                quality = glassQuality
                             )
                             Screen.Picker -> PickerScreen(
                                 albums = pickerAlbums,
@@ -286,7 +361,9 @@ class MainActivity : ComponentActivity() {
                                 onConfirm = { picked ->
                                     showPicker = false
                                     addPickedItems(picked)
-                                }
+                                },
+                                quality = glassQuality,
+                                pauseGlassOnScroll = appSettings.pauseGlassOnScroll
                             )
                             Screen.FixTime -> FixTimeScreen(
                                 albums = fixAlbums,
@@ -297,7 +374,9 @@ class MainActivity : ComponentActivity() {
                                 statusText = fixStatus,
                                 selectionReset = fixSelectionReset,
                                 onBack = { showFixTime = false },
-                                onFix = { selected -> startFixTimes(selected) }
+                                onFix = { selected -> startFixTimes(selected) },
+                                quality = glassQuality,
+                                pauseGlassOnScroll = appSettings.pauseGlassOnScroll
                             )
                             Screen.Main -> MainScreen(
                                 items = items.toList(),
@@ -307,23 +386,19 @@ class MainActivity : ComponentActivity() {
                                 progressDetail = progressDetail,
                                 pendingRestoreCount = pendingRestoreCount,
                                 onRestoreOriginals = { restoreTrashedOriginals() },
-                                outputRelPath = outputRelPath,
                                 isMovingOutputs = isMovingOutputs,
                                 onEditOutputPath = {
-                                    outputPathInput = outputRelPath
+                                    outputPathInput = appSettings.outputRelPath
                                     showOutputPathDialog = true
                                 },
                                 onMoveToCamera = { moveOutputsToCamera() },
                                 onOpenFixTime = { openFixTime() },
-                                deleteOriginal = deleteOriginal,
                                 onToggleDeleteOriginal = { on ->
                                     // 开启且未授予所有文件访问权限时，提示授权以去掉系统确认框
                                     if (on && !Environment.isExternalStorageManager()) {
                                         showAllFilesDialog = true
                                     }
-                                    deleteOriginal = on
-                                    getSharedPreferences("vliveconvert", MODE_PRIVATE)
-                                        .edit().putBoolean("delete_original", on).apply()
+                                    updateSettings(appSettings.copy(deleteOriginal = on))
                                 },
                                 onAddMore = { openBuiltInPicker() },
                                 onStartConvert = { startConvert() },
@@ -333,7 +408,12 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onRemove = { ci ->
                                     items.removeAll { it.item.key == ci.item.key }
-                                }
+                                },
+                                settings = appSettings,
+                                onSettingsChange = { updateSettings(it) },
+                                quality = glassQuality,
+                                versionName = versionName,
+                                totalRamMb = totalRamMb
                             )
                         }
                     }
@@ -391,19 +471,16 @@ class MainActivity : ComponentActivity() {
                             Button(onClick = {
                                 val raw = outputPathInput.trim()
                                 if (raw.isEmpty()) {
-                                    outputRelPath = "Pictures/VLiveConvert"
-                                    getSharedPreferences("vliveconvert", MODE_PRIVATE)
-                                        .edit().putString("output_rel_path", outputRelPath).apply()
+                                    val def = AppSettings.DEFAULT_OUTPUT_PATH
+                                    updateSettings(appSettings.copy(outputRelPath = def))
                                     showOutputPathDialog = false
-                                    statusText = "输出目录已恢复默认：$outputRelPath"
+                                    statusText = "输出目录已恢复默认：$def"
                                 } else {
                                     val s = sanitizeRelPath(raw)
                                     if (s == null) {
                                         statusText = "路径无效：不能包含 \\ : * ? \" < > | 或 ..（可留空恢复默认）"
                                     } else {
-                                        outputRelPath = s
-                                        getSharedPreferences("vliveconvert", MODE_PRIVATE)
-                                            .edit().putString("output_rel_path", s).apply()
+                                        updateSettings(appSettings.copy(outputRelPath = s))
                                         showOutputPathDialog = false
                                         statusText = "输出目录已设为：$s"
                                     }
@@ -440,7 +517,16 @@ class MainActivity : ComponentActivity() {
                     )
                 }
             }
+            }
         }
+    }
+
+    // ---------- 设置 ----------
+
+    /** 更新并持久化设置；Compose 状态立即生效。 */
+    private fun updateSettings(new: AppSettings) {
+        appSettings = new
+        settingsStore.save(new)
     }
 
     // ---------- 权限 ----------
@@ -518,86 +604,111 @@ class MainActivity : ComponentActivity() {
             return
         }
 
+        val snapshot = appSettings
+        val total = targets.size
         isConverting = true
         progress = 0f
-        progressDetail = "已处理 0/${targets.size}"
+        progressDetail = "已处理 0/$total"
 
-        lifecycleScope.launch(Dispatchers.IO) {
-            // 4 路并发转换（Semaphore 限流），单文件异常隔离不中断
-            val sem = Semaphore(4)
-            val total = targets.size
-            val done = AtomicInteger(0)
-            val ok = AtomicInteger(0)
-            val fail = AtomicInteger(0)
+        lifecycleScope.launch {
+            val scheduler = ConversionScheduler(
+                concurrency = snapshot.concurrency,
+                memoryBudgetMb = snapshot.memoryLimitMb,
+                outDir = tempOutDir.absolutePath
+            )
+            var ok = 0
+            var fail = 0
+            var batchError: String? = null
 
-            val jobs = targets.map { ci ->
-                launch {
-                    sem.withPermit {
-                        withContext(Dispatchers.Main) {
-                            replaceItem(ci, ci.copy(status = "转换中…"))
-                        }
-                        var staged: String? = null
-                        try {
-                            staged = Converter.convertToVivoSingle(
-                                path = ci.item.path,
-                                outDir = tempOutDir.absolutePath,
-                                log = { level, msg, _ ->
-                                    if (level == "warning") {
-                                        // 日志回调在 IO 线程触发，状态写入需切回 Main
-                                        lifecycleScope.launch(Dispatchers.Main) { statusText = msg }
+            try {
+                scheduler.run(
+                    targets = targets,
+                    onStart = { ci ->
+                        replaceItem(ci, ci.copy(status = "转换中…"))
+                    },
+                    onResult = { ci, outcome ->
+                        when (outcome) {
+                            is ConversionScheduler.Outcome.Ok -> {
+                                // 拍摄时间优先；缺失回退文件名解析，再回退修改时间
+                                val ts = when {
+                                    ci.item.dateTaken > 0 -> ci.item.dateTaken
+                                    else -> PhotoTime.parseFromName(ci.item.name)
+                                        ?: (if (ci.item.dateModified > 0) ci.item.dateModified * 1000L
+                                            else System.currentTimeMillis())
+                                }
+                                try {
+                                    withContext(Dispatchers.IO) {
+                                        exportToMediaStore(
+                                            outcome.stagedPath,
+                                            ts,
+                                            snapshot.outputRelPath
+                                        )
+                                        // 开关开启：收集本项原图（jpg + 伴生 mp4），批次结束统一删除
+                                        if (snapshot.deleteOriginal) collectOriginalUris(ci)
+                                    }
+                                    ok++
+                                    replaceItem(ci, ci.copy(
+                                        status = "完成：已导出到相册 ${snapshot.outputRelPath}",
+                                        done = true
+                                    ))
+                                } catch (e: kotlinx.coroutines.CancellationException) {
+                                    throw e
+                                } catch (e: OutOfMemoryError) {
+                                    fail++
+                                    replaceItem(ci, ci.copy(
+                                        status = "失败：内存不足（导出阶段）",
+                                        failed = true
+                                    ))
+                                } catch (e: Exception) {
+                                    fail++
+                                    replaceItem(ci, ci.copy(
+                                        status = "失败：${e.message ?: "未知错误"}",
+                                        failed = true
+                                    ))
+                                } finally {
+                                    // 清理本地暂存产物（已导出 / 失败均清理）
+                                    withContext(Dispatchers.IO) {
+                                        try {
+                                            File(outcome.stagedPath).delete()
+                                        } catch (_: Exception) {
+                                        }
                                     }
                                 }
-                            )
-                            // 拍摄时间优先；缺失回退文件名解析，再回退修改时间
-                            val ts = when {
-                                ci.item.dateTaken > 0 -> ci.item.dateTaken
-                                else -> PhotoTime.parseFromName(ci.item.name)
-                                    ?: (if (ci.item.dateModified > 0) ci.item.dateModified * 1000L
-                                        else System.currentTimeMillis())
                             }
-                            exportToMediaStore(staged, ts)
-                            ok.incrementAndGet()
-                            // 开关开启：收集本项原图（jpg + 伴生 mp4），批次结束统一删除
-                            if (deleteOriginal) collectOriginalUris(ci)
-                            withContext(Dispatchers.Main) {
+
+                            is ConversionScheduler.Outcome.Failed -> {
+                                fail++
                                 replaceItem(ci, ci.copy(
-                                    status = "完成：已导出到相册 $outputRelPath",
-                                    done = true
-                                ))
-                            }
-                        } catch (e: Exception) {
-                            fail.incrementAndGet()
-                            withContext(Dispatchers.Main) {
-                                replaceItem(ci, ci.copy(
-                                    status = "失败：${e.message ?: "未知错误"}",
+                                    status = "失败：${outcome.message}",
                                     failed = true
                                 ))
                             }
-                        } finally {
-                            // 清理本地暂存产物（已导出 / 失败均清理）
-                            staged?.let { p -> try { File(p).delete() } catch (_: Exception) {} }
                         }
-                        val d = done.incrementAndGet()
-                        withContext(Dispatchers.Main) {
-                            progress = d.toFloat() / total
-                            progressDetail = "已处理 $d/$total"
-                        }
+                    },
+                    onProgress = { done, _ ->
+                        progress = done.toFloat() / total
+                        progressDetail = "已处理 $done/$total"
+                    },
+                    onWarning = { msg ->
+                        lifecycleScope.launch(Dispatchers.Main) { statusText = msg }
                     }
-                }
+                )
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                batchError = "转换异常：${e.message ?: e.javaClass.simpleName}"
             }
-            jobs.joinAll()
-            withContext(Dispatchers.Main) {
-                isConverting = false
-                progress = 0f
-                progressDetail = ""
-                statusText = "转换完成：成功 ${ok.get()} 个，失败 ${fail.get()} 个" +
-                    "（输出目录：$outputRelPath）"
-                // 删除原图开关：批次完成后一次性请求把成功项的原图移入回收站
-                if (deleteOriginal) requestDeleteOriginals(statusText)
-                // 清理暂存目录
-                lifecycleScope.launch(Dispatchers.IO) {
-                    try { tempOutDir.listFiles()?.forEach { it.delete() } } catch (_: Exception) {}
-                }
+
+            isConverting = false
+            progress = 0f
+            progressDetail = ""
+            statusText = batchError ?: ("转换完成：成功 $ok 个，失败 $fail 个" +
+                "（输出目录：${snapshot.outputRelPath}）")
+            // 删除原图开关：批次完成后一次性请求把成功项的原图移入回收站
+            if (snapshot.deleteOriginal) requestDeleteOriginals(statusText)
+            // 清理暂存目录
+            withContext(Dispatchers.IO) {
+                try { tempOutDir.listFiles()?.forEach { it.deleteRecursively() } } catch (_: Exception) {}
             }
         }
     }
@@ -685,11 +796,13 @@ class MainActivity : ComponentActivity() {
     // ---------- 导出 ----------
 
     /**
-     * 导出到系统相册（Pictures/VLiveConvert）。
+     * 导出到系统相册（默认 Pictures/VLiveConvert）。
      * MediaStore 标准写入（IS_PENDING，写完才出现在相册）；
      * 输出为单个 .jpg（vivo 单文件实况）。
+     *
+     * [relPath] 使用批次开始时的输出目录快照，避免转换中修改设置导致同一批散落两处。
      */
-    private fun exportToMediaStore(srcPath: String, timestamp: Long) {
+    private fun exportToMediaStore(srcPath: String, timestamp: Long, relPath: String) {
         val src = File(srcPath)
         if (!src.exists() || src.length() == 0L) {
             throw IOException("转换产物缺失或为空")
@@ -697,7 +810,7 @@ class MainActivity : ComponentActivity() {
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, src.name)
             put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
-            put(MediaStore.MediaColumns.RELATIVE_PATH, outputRelPath)
+            put(MediaStore.MediaColumns.RELATIVE_PATH, relPath)
             put(MediaStore.MediaColumns.IS_PENDING, 1)
             put(MediaStore.MediaColumns.DATE_MODIFIED, timestamp / 1000)
             put(MediaStore.MediaColumns.DATE_TAKEN, timestamp)
@@ -784,45 +897,75 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * 批次结束后一次性请求删除原图（含伴生视频）：
+     * 批次结束后请求删除原图（含伴生视频）：
      * - 已授予「所有文件访问权限」→ 直接删除，无需确认
-     * - 否则 createTrashRequest 整批一次系统确认弹窗，确认后移入回收站
+     * - 否则 createTrashRequest 分批系统确认，确认后移入回收站
+     *
+     * 过滤/删除都在 IO 线程执行，避免 300+ 张时阻塞主线程。
      */
     private fun requestDeleteOriginals(baseStatus: String) {
         val all = synchronized(pendingDeleteUris) { pendingDeleteUris.distinct().toList() }
         pendingDeleteUris.clear()
         if (all.isEmpty()) return
-        // 过滤已失效条目，避免请求抛异常
-        val valid = all.filter { uri ->
-            try {
-                contentResolver.query(uri, arrayOf(MediaStore.MediaColumns._ID), null, null, null)
-                    ?.use { it.moveToFirst() } == true
-            } catch (_: Exception) {
-                false
-            }
-        }
-        if (valid.isEmpty()) {
-            statusText = "$baseStatus；原图删除失败（无法访问原文件）"
-            return
-        }
         deleteBaseStatus = baseStatus
-        if (Environment.isExternalStorageManager()) {
-            var deleted = 0
-            for (uri in valid) {
-                try { if (contentResolver.delete(uri, null, null) > 0) deleted++ } catch (_: Exception) {}
+
+        lifecycleScope.launch(Dispatchers.IO) {
+            // 过滤已失效条目，避免请求抛异常
+            val valid = all.filter { uri ->
+                try {
+                    contentResolver.query(
+                        uri, arrayOf(MediaStore.MediaColumns._ID), null, null, null
+                    )?.use { it.moveToFirst() } == true
+                } catch (_: Exception) {
+                    false
+                }
             }
-            statusText = "$baseStatus；已直接删除 $deleted 个原文件" +
-                "（vivo 相册「第三方删除拦截」中可查看/恢复）"
-            return
+            if (valid.isEmpty()) {
+                withContext(Dispatchers.Main) {
+                    statusText = "$baseStatus；原图删除失败（无法访问原文件）"
+                }
+                return@launch
+            }
+
+            if (Environment.isExternalStorageManager()) {
+                var deleted = 0
+                for (uri in valid) {
+                    try {
+                        if (contentResolver.delete(uri, null, null) > 0) deleted++
+                    } catch (_: Exception) {
+                    }
+                }
+                withContext(Dispatchers.Main) {
+                    statusText = "$baseStatus；已直接删除 $deleted 个原文件" +
+                        "（vivo 相册「第三方删除拦截」中可查看/恢复）"
+                }
+                return@launch
+            }
+
+            // 未授权所有文件访问：分批走系统回收站，避免一次事务携带 300×2 个 URI
+            withContext(Dispatchers.Main) {
+                trashQueue.clear()
+                trashQueue.addAll(valid.chunked(TRASH_BATCH_SIZE))
+                trashTotalCount = valid.size
+                trashDoneCount = 0
+                val first = trashQueue.removeFirstOrNull()
+                if (first != null) launchTrashBatch(first)
+            }
         }
+    }
+
+    /** 提交一批回收站请求；结果回调会继续下一批。 */
+    private fun launchTrashBatch(batch: List<Uri>) {
         try {
-            val sender = MediaStore.createTrashRequest(contentResolver, valid, true).intentSender
-            pendingDeleteCount = valid.size
-            lastTrashUris = valid.map { it.toString() }
+            val sender = MediaStore.createTrashRequest(contentResolver, batch, true).intentSender
+            lastTrashUris = batch.map { it.toString() }
             deleteRequestLauncher.launch(IntentSenderRequest.Builder(sender).build())
         } catch (e: Exception) {
-            statusText = "$baseStatus；原图移入回收站失败（${e.message}）"
+            statusText = "$deleteBaseStatus；原图移入回收站失败（${e.message}）"
             lastTrashUris = emptyList()
+            trashQueue.clear()
+            trashDoneCount = 0
+            trashTotalCount = 0
         }
     }
 
@@ -899,11 +1042,26 @@ class MainActivity : ComponentActivity() {
             statusText = "没有可恢复的原图（记录已过期或文件已被系统清理）"
             return
         }
+        restoreQueue.clear()
+        restoreQueue.addAll(uris.chunked(TRASH_BATCH_SIZE))
+        restoreTotalCount = uris.size
+        restoreDoneCount = 0
+        val first = restoreQueue.removeFirstOrNull() ?: return
+        launchRestoreBatch(first)
+    }
+
+    /** 提交一批恢复请求；结果回调会继续下一批。 */
+    private fun launchRestoreBatch(batch: List<Uri>) {
         try {
-            val sender = MediaStore.createTrashRequest(contentResolver, uris, false).intentSender
+            restoreCurrentBatchSize = batch.size
+            val sender = MediaStore.createTrashRequest(contentResolver, batch, false).intentSender
             restoreRequestLauncher.launch(IntentSenderRequest.Builder(sender).build())
         } catch (e: Exception) {
             statusText = "恢复原图失败（${e.message}）"
+            restoreQueue.clear()
+            restoreDoneCount = 0
+            restoreTotalCount = 0
+            restoreCurrentBatchSize = 0
         }
     }
 
@@ -1029,17 +1187,18 @@ class MainActivity : ComponentActivity() {
     /** 把输出目录中的全部已转换文件移动到 DCIM/Camera */
     private fun moveOutputsToCamera() {
         if (isMovingOutputs || isConverting) return
-        if (outputRelPath.equals("DCIM/Camera", ignoreCase = true)) {
+        val relPath = appSettings.outputRelPath
+        if (relPath.equals("DCIM/Camera", ignoreCase = true)) {
             statusText = "输出目录已是 DCIM/Camera，无需移动"
             return
         }
         lifecycleScope.launch(Dispatchers.IO) {
             withContext(Dispatchers.Main) { isMovingOutputs = true }
-            val items = queryImagesIn(outputRelPath)
+            val items = queryImagesIn(relPath)
             if (items.isEmpty()) {
                 withContext(Dispatchers.Main) {
                     isMovingOutputs = false
-                    statusText = "输出目录（$outputRelPath）中没有可移动的文件"
+                    statusText = "输出目录（$relPath）中没有可移动的文件"
                 }
                 return@launch
             }

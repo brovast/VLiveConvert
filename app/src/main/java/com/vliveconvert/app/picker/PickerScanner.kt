@@ -29,7 +29,10 @@ import java.util.concurrent.atomic.AtomicInteger
  *
  * 无磁盘持久化：扫描结果仅存内存，不产生任何本地存储。
  */
-class PickerScanner(private val repo: MediaRepo) {
+class PickerScanner(
+    private val repo: MediaRepo,
+    private val threadsProvider: () -> Int = { 4 }
+) {
 
     class ScanState {
         /** 已识别为双文件实况的列表（Compose 状态，UI 直接观察） */
@@ -96,7 +99,8 @@ class PickerScanner(private val repo: MediaRepo) {
             if (diffRefresh(st, bucketId)) {
                 st.running = true
                 // workers 作为本 job 的子协程启动，随父协程取消而终止
-                val workers = (1..SCAN_THREADS).map {
+                val threads = threadsProvider().coerceIn(1, 8)
+                val workers = (1..threads).map {
                     launch { scanWorker(st) }
                 }
                 workers.forEach { it.join() }
@@ -165,6 +169,6 @@ class PickerScanner(private val repo: MediaRepo) {
     }
 
     companion object {
-        private const val SCAN_THREADS = 4
+        const val DEFAULT_SCAN_THREADS = 4
     }
 }

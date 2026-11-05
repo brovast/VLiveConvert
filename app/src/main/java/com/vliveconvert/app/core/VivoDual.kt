@@ -70,17 +70,19 @@ internal object VivoDual {
             ?: throw VivoDualException("缺少伴生视频文件：${File(path).nameWithoutExtension}.mp4")
 
         // JPG 主体（去除 footer）→ 拆 Primary / GainMap / streamdata 附加块
-        val body = data.copyOfRange(0, footer.footerStart)
-        val (jpegs, consumed) = JpegUtil.splitJpegs(body)
+        // 直接在原数组上按 [0, footerStart) 切分，避免再复制一整份 JPG
+        val (jpegs, consumed) = JpegUtil.splitJpegs(data, 0, footer.footerStart)
         if (jpegs.isEmpty()) throw VivoDualException("JPG 主体解析失败")
         val primary = jpegs[0]
         val gainmap = if (jpegs.size > 1) jpegs[1] else null
         // JPEG 之后的附加数据块（"streamdata" 魔数开头的 vivo 私有流）：
         // 普通实况约 114B（DEGS 流信息）；人像实况约 4MB（IAC 深度/虚化数据，
         // 丢失会导致相册不再显示人像徽标、无法后编辑光圈/虚化）。必须原样透传。
-        val streamData = if (consumed < body.size) body.copyOfRange(consumed, body.size) else ByteArray(0)
+        val streamData =
+            if (consumed < footer.footerStart) data.copyOfRange(consumed, footer.footerStart)
+            else ByteArray(0)
 
-        // MP4：剥离末尾 vivoMediaExtInfo uuid box（内嵌源 footer 包装）
+        // MP4：记录有效段长度（去掉末尾 vivoMediaExtInfo uuid），但不复制整段视频
         val mp4Raw = File(mp4Path).readBytes()
         val mp4Footer = FooterUtil.parseFooter(mp4Raw)
         var imageTime: Long? = footer.imageTime
@@ -92,19 +94,20 @@ internal object VivoDual {
             }
         }
 
-        val video = Mp4Util.stripVivoUuid(mp4Raw)
-        if (!Mp4Util.hasFtyp(video))
+        val videoEnd = Mp4Util.stripVivoUuidEnd(mp4Raw)
+        if (!Mp4Util.hasFtyp(mp4Raw))
             throw VivoDualException("伴生 MP4 无效（缺少 ftyp box）")
 
         val asset = LivePhotoAsset(
             primaryJpeg = primary,
             gainmapJpeg = gainmap,
-            videoMp4 = video,
+            videoMp4 = mp4Raw,
             sourceFormat = "vivo_dual",
         )
+        asset.videoByteLength = videoEnd
         asset.livephotoId = liveId
         asset.imageTime = imageTime
-        asset.videoInfo = Mp4Util.getTrackInfo(video) ?: mutableMapOf()
+        asset.videoInfo = Mp4Util.getTrackInfo(mp4Raw) ?: mutableMapOf()
         // 透传数据：streamdata 附加块 + 源 JPG/MP4 footer 的完整字段
         // （供单文件写出时合并人像标记 moduleid/joint.refocus 等）
         asset.extras["vivo_streamdata"] = streamData

@@ -94,13 +94,20 @@ internal object JpegUtil {
     /**
      * 把可能由多个 JPEG 顺序拼接的数据拆成单个 JPEG 字节块列表。
      * 返回 (jpegList, consumed)。剩余非 JPEG 字节不在结果中。
+     *
+     * [start] / [end] 用于在原始大数组上直接切分（例如 JPG 主体到 footer 之前），
+     * 避免先 `copyOfRange` 出一整份 JPG 再解析。
      */
-    fun splitJpegs(data: ByteArray): Pair<MutableList<ByteArray>, Int> {
+    fun splitJpegs(
+        data: ByteArray,
+        start: Int = 0,
+        end: Int = data.size
+    ): Pair<MutableList<ByteArray>, Int> {
         val result = mutableListOf<ByteArray>()
-        var pos = 0
-        val size = data.size
+        var pos = start
+        val limit = end.coerceIn(start, data.size)
 
-        while (pos + 4 <= size && data[pos] == 0xFF.toByte() && data[pos + 1] == 0xD8.toByte()) {
+        while (pos + 4 <= limit && data[pos] == 0xFF.toByte() && data[pos + 1] == 0xD8.toByte()) {
             var sosPayloadEnd: Int? = null
             for (seg in iterateSegments(data, pos)) {
                 if (seg.marker == 0xDA.toByte()) {
@@ -116,7 +123,7 @@ internal object JpegUtil {
             pos = eoiEnd
 
             // 跳过后续 JPEG 之间可能的填充 0xFF
-            while (pos < size && data[pos] == 0xFF.toByte() && pos + 1 < size && data[pos + 1] == 0xFF.toByte()) {
+            while (pos < limit && data[pos] == 0xFF.toByte() && pos + 1 < limit && data[pos + 1] == 0xFF.toByte()) {
                 pos++
             }
         }
